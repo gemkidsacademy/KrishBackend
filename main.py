@@ -25,9 +25,14 @@ import numpy as np
 # -----------------------------
 app = FastAPI()
 
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=[
+        "https://krish-chat-bot.vercel.app",
+        "https://your-other-domain.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
