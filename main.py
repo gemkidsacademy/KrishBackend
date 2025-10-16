@@ -1,6 +1,7 @@
 # FastAPI & Pydantic
 from fastapi import FastAPI, Response, Depends, HTTPException
 from pydantic import BaseModel
+from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean
