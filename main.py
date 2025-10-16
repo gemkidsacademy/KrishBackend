@@ -83,14 +83,29 @@ DEMO_FOLDER_ID = "1lyKKM94QxpLf0Re76_1rGuk5gCRWcuP0"
 # Google Cloud Storage Setup
 # -----------------------------
 # Path to your service account JSON for GCS
-service_account_info = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
+service_account_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if not service_account_json:
+    raise ValueError("Environment variable 'GOOGLE_APPLICATION_CREDENTIALS_JSON' not set")
 
-# Initialize GCS client and get the bucket
-gcs_client = storage.Client(credentials=Credentials.from_service_account_info(service_account_info),
-                            project=service_account_info["project_id"])
+# Replace escaped newlines if they exist (common in env vars)
+service_account_json = service_account_json.replace('\\n', '\n')
+
+# Parse JSON
+try:
+    service_account_info = json.loads(service_account_json)
+except json.JSONDecodeError as e:
+    raise ValueError(f"Invalid JSON in 'GOOGLE_APPLICATION_CREDENTIALS_JSON': {e}")
+
+# 2️⃣ Initialize GCS client with explicit credentials
+credentials = Credentials.from_service_account_info(service_account_info)
+project_id = service_account_info.get("project_id")
+gcs_client = storage.Client(credentials=credentials, project=project_id)
+
+# 3️⃣ Get bucket
 gcs_bucket_name = "krishdemochatbot"
 gcs_bucket = gcs_client.bucket(gcs_bucket_name)
 
+print(f"GCS client initialized for project '{project_id}', bucket '{gcs_bucket_name}'")
 
 #---------------- database connectivity 
 DATABASE_URL = os.environ.get("DATABASE_URL") or (
