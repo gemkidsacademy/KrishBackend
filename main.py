@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+import json
 from fastapi.middleware.cors import CORSMiddleware
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -48,10 +49,10 @@ openai_client = OpenAI(
 # -----------------------------
 # Google Drive Setup
 # -----------------------------
-SERVICE_ACCOUNT_FILE = "service_account.json"
+SERVICE_ACCOUNT_INFO = json.loads(os.environ["GCP_SERVICE_ACCOUNT_JSON"])
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 drive_service = build("drive", "v3", credentials=creds)
 
 DEMO_FOLDER_ID = "1lyKKM94QxpLf0Re76_1rGuk5gCRWcuP0"
@@ -60,10 +61,11 @@ DEMO_FOLDER_ID = "1lyKKM94QxpLf0Re76_1rGuk5gCRWcuP0"
 # Google Cloud Storage Setup
 # -----------------------------
 # Path to your service account JSON for GCS
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "service_account_gcs.json"
+service_account_info = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
 
 # Initialize GCS client and get the bucket
-gcs_client = storage.Client()
+gcs_client = storage.Client(credentials=Credentials.from_service_account_info(service_account_info),
+                            project=service_account_info["project_id"])
 gcs_bucket_name = "krishdemochatbot"
 gcs_bucket = gcs_client.bucket(gcs_bucket_name)
 
