@@ -23,7 +23,8 @@ import os
 import pickle
 import tempfile
 import numpy as np
-
+from sqlalchemy.orm import Session
+from werkzeug.security import generate_password_hash
 # -----------------------------
 # App & CORS
 # -----------------------------
@@ -96,6 +97,36 @@ class User(Base):
 
 
 Base.metadata.create_all(bind=engine)
+
+ADMIN_EMAIL = "admin@example.com"
+ADMIN_NAME = "Admin"
+ADMIN_PASSWORD = "admin123"  # plaintext, will hash
+ADMIN_PHONE = "0000000000"
+ADMIN_CLASS = "Admin"
+
+# Use a session to interact with the database
+with Session(engine) as session:
+    # Check if an admin user already exists
+    admin_user = session.query(User).filter_by(email=ADMIN_EMAIL).first()
+
+    if not admin_user:
+        # Hash the password before storing
+        hashed_password = generate_password_hash(ADMIN_PASSWORD)
+        
+        # Create the admin user
+        new_admin = User(
+            name=ADMIN_NAME,
+            email=ADMIN_EMAIL,
+            phone_number=ADMIN_PHONE,
+            class_name=ADMIN_CLASS,
+            password=hashed_password
+        )
+        session.add(new_admin)
+        session.commit()
+        print("Admin user created.")
+    else:
+        print("Admin user already exists.")
+        
 
 #----------------------functions
 
