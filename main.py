@@ -186,77 +186,130 @@ async def login(
     response: Response,
     db: Session = Depends(get_db)
 ):
-    # Debug: log entire login_request data
-    print("DEBUG: Received login request data:", login_request.dict())
-    print(f"DEBUG: Received login request for username: {login_request.username}")
+    print("\n==================== LOGIN ATTEMPT START ====================")
 
-    # Fetch user from the database
-    user = db.query(User).filter(User.username == login_request.username).first()
-    print("DEBUG: User fetched from DB:", user)
+    # Log the incoming request data
+    try:
+        print("DEBUG: Raw login_request object:", login_request)
+        print("DEBUG: login_request type:", type(login_request))
+        print("DEBUG: login_request.dict():", login_request.dict())
+        print(f"DEBUG: Username received: {login_request.username}")
+        print(f"DEBUG: Password received: {login_request.password}")
+    except Exception as e:
+        print("ERROR: Failed to print login_request details:", e)
+
+    # Fetch user from DB
+    print("\n--- Step 1: Fetching user from DB ---")
+    try:
+        user = db.query(User).filter(User.username == login_request.username).first()
+        print("DEBUG: Raw user fetched:", user)
+        if user:
+            print(f"DEBUG: User found: ID={user.id}, Username={user.username}")
+            print(f"DEBUG: Stored (hashed) password: {user.password}")
+        else:
+            print("DEBUG: No user found in DB with that username.")
+    except Exception as e:
+        print("ERROR while querying user:", e)
+        raise HTTPException(status_code=500, detail="Database error")
 
     if not user:
-        print("DEBUG: No user found with that username.")
+        print("DEBUG: Aborting - invalid username.")
+        print("==================== LOGIN ATTEMPT END ====================\n")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # Debug: verify password presence and compare
-    print("DEBUG: Verifying password...")
-    if not pwd_context.verify(login_request.password, user.password):
-        print("DEBUG: Invalid password provided. Expected:", user.password, "Received:", login_request.password)
+    # Step 2: Password Verification
+    print("\n--- Step 2: Verifying password ---")
+    try:
+        if login_request.password is None:
+            print("DEBUG: Password missing from request.")
+        elif user.password is None:
+            print("DEBUG: Stored password is None in DB.")
+
+        print("DEBUG: Comparing provided password vs stored hash...")
+        password_verified = pwd_context.verify(login_request.password, user.password)
+        print("DEBUG: pwd_context.verify result:", password_verified)
+    except Exception as e:
+        print("ERROR during password verification:", e)
+        raise HTTPException(status_code=500, detail="Password verification error")
+
+    if not password_verified:
+        print(f"DEBUG: Invalid password for user {login_request.username}")
+        print("DEBUG: Provided password:", login_request.password)
+        print("DEBUG: Expected (hashed) password:", user.password)
+        print("==================== LOGIN ATTEMPT END ====================\n")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     print("DEBUG: Password verified successfully.")
 
-    # Check if an active session already exists for the user
-    existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
-    print("DEBUG: Existing session fetched:", existing_session)
+    # Step 3: Check for existing session
+    print("\n--- Step 3: Checking existing session ---")
+    try:
+        existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
+        print("DEBUG: Existing session query result:", existing_session)
+    except Exception as e:
+        print("ERROR while checking existing session:", e)
+        existing_session = None
 
     if existing_session:
         session_token = existing_session.session_token
         public_token = existing_session.public_token
-        print(f"DEBUG: Existing session found for user {user.id}: {session_token}")
+        print(f"DEBUG: Reusing existing session for user {user.id}")
+        print(f"DEBUG: session_token={session_token}")
+        print(f"DEBUG: public_token={public_token}")
     else:
-        # Generate a new session token
-        session_token = str(uuid4())
-        public_token = str(uuid4())
-        print(f"DEBUG: Generated new session token: {session_token}")
-        print(f"DEBUG: Generated new public token: {public_token}")
+        print("DEBUG: No existing session found. Creating new session...")
+        try:
+            session_token = str(uuid4())
+            public_token = str(uuid4())
+            print(f"DEBUG: Generated session_token={session_token}")
+            print(f"DEBUG: Generated public_token={public_token}")
 
-        # Store session in the database
-        new_session = SessionModel(
-            session_token=session_token,
-            user_id=user.id,
-            public_token=public_token
+            new_session = SessionModel(
+                session_token=session_token,
+                user_id=user.id,
+                public_token=public_token
+            )
+            db.add(new_session)
+            db.commit()
+            print("DEBUG: New session stored successfully.")
+        except Exception as e:
+            print("ERROR while creating new session:", e)
+            raise HTTPException(status_code=500, detail="Session creation failed")
+
+    # Step 4: Set session cookie
+    print("\n--- Step 4: Setting cookie ---")
+    try:
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=False,  # Change to True if using HTTPS
+            samesite="Lax",
+            max_age=3600
         )
-        db.add(new_session)
-        db.commit()
-        print("DEBUG: New session stored in the database.")
+        print("DEBUG: Cookie set successfully with session_token:", session_token)
+    except Exception as e:
+        print("ERROR while setting cookie:", e)
 
-    # Set session cookie
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=False,  # Change to True if using HTTPS
-        samesite="Lax",
-        max_age=3600
-    )
-    print("DEBUG: Session cookie set successfully.")
-
-    # Debug: log final response content
+    # Step 5: Prepare and return response
+    print("\n--- Step 5: Preparing response ---")
     response_content = {
         "message": "Login successful",
         "id": user.id,
         "name": user.name,
-        "email": getattr(user, "email", None),  # optional field from User table
-        "session_token": str(session_token),
-        "public_token": str(public_token)
+        "email": getattr(user, "email", None),
+        "session_token": session_token,
+        "public_token": public_token
     }
-    print("DEBUG: Returning response content:", response_content)
+    print("DEBUG: Response content prepared:", response_content)
+
+    print("==================== LOGIN ATTEMPT SUCCESS ====================\n")
 
     return JSONResponse(
         content=response_content,
         status_code=200
     )
+
 
         
 
