@@ -321,8 +321,8 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash the password
-    hashed_password = pbkdf2_sha256.hash(user_request.password)
+    # Hash the password using Werkzeug (compatible with check_password_hash later)
+    hashed_password = generate_password_hash(user_request.password)
 
     # Create new user instance
     new_user = User(
