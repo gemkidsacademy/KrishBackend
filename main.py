@@ -297,9 +297,9 @@ async def login(
         "message": "Login successful",
         "id": user.id,
         "name": user.name,
-        "email": getattr(user, "email", None),
-        "session_token": session_token,
-        "public_token": public_token
+        "email": user.email,
+        "session_token": str(session_token),  # convert to string
+        "public_token": str(public_token)     # convert to string
     }
 
     print("DEBUG: Response content:", response_content)
