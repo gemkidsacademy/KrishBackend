@@ -176,7 +176,10 @@ def get_db():
 # -----------------------------
 # API Endpoints
 # -----------------------------
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(
+    schemes=["bcrypt", "pbkdf2_sha256"],
+    deprecated="auto"
+)
 
 @app.options("/{path:path}")  # 👈 handles all OPTIONS requests
 async def preflight_handler(path: str):
