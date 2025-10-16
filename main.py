@@ -129,9 +129,8 @@ class SessionModel(Base):  # Handles authentication sessions
     user = relationship("User", back_populates="sessions")
     
 class LoginRequest(BaseModel):
-    username: str
+    name: str
     password: str
-
 
 
 Base.metadata.create_all(bind=engine)
@@ -205,27 +204,27 @@ async def login(
     except Exception as e:
         print("ERROR: Could not print login_request:", e)
 
-    email = login_request.email
+    name = login_request.name
     password = login_request.password
 
-    if not email or not password:
-        print("ERROR: Missing email or password.")
-        raise HTTPException(status_code=400, detail="Email and password are required")
+    if not name or not password:
+        print("ERROR: Missing name or password.")
+        raise HTTPException(status_code=400, detail="Name and password are required")
 
     # Step 2: Fetch user from DB
     print("\n--- Step 2: Fetching user from DB ---")
     try:
-        user = db.query(User).filter(User.email == email).first()
+        user = db.query(User).filter(User.name == name).first()
         if user:
-            print(f"DEBUG: Found user -> ID={user.id}, Email={user.email}")
+            print(f"DEBUG: Found user -> ID={user.id}, Name={user.name}")
         else:
-            print("DEBUG: No user found with that email.")
+            print("DEBUG: No user found with that name.")
     except Exception as e:
         print("ERROR while querying user:", e)
         raise HTTPException(status_code=500, detail="Database query failed")
 
     if not user:
-        print("==================== LOGIN ATTEMPT END (invalid email) ====================\n")
+        print("==================== LOGIN ATTEMPT END (invalid name) ====================\n")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     # Step 3: Verify password
@@ -274,7 +273,7 @@ async def login(
             key="session_token",
             value=session_token,
             httponly=True,
-            secure=False,  # Set to True for HTTPS
+            secure=False,  # set to True if using HTTPS
             samesite="Lax",
             max_age=3600
         )
@@ -288,7 +287,7 @@ async def login(
         "message": "Login successful",
         "id": user.id,
         "name": user.name,
-        "email": user.email,
+        "email": getattr(user, "email", None),
         "session_token": session_token,
         "public_token": public_token
     }
