@@ -132,6 +132,13 @@ class LoginRequest(BaseModel):
     name: str
     password: str
 
+class AddUserRequest(BaseModel):
+    id: int
+    name: str
+    email: str
+    password: str
+    phone_number: str | None = None
+    class_name: str | None = None
 
 Base.metadata.create_all(bind=engine)
 
@@ -305,6 +312,34 @@ def get_next_user_id(db: Session = Depends(get_db)):
     last_user = db.query(User).order_by(User.id.desc()).first()
     next_id = (last_user.id + 1) if last_user else 1
     return next_id
+
+@app.post("/add_user")
+def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == user_request.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Hash the password
+    hashed_password = pbkdf2_sha256.hash(user_request.password)
+
+    # Create new user instance
+    new_user = User(
+        id=user_request.id,
+        name=user_request.name,
+        email=user_request.email,
+        phone_number=user_request.phone_number,
+        class_name=user_request.class_name,
+        password=hashed_password,
+        created_at=datetime.utcnow()
+    )
+
+    # Save to DB
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {"message": f"User '{new_user.name}' added successfully!"}
 
         
 
