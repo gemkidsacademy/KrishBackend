@@ -53,11 +53,11 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://krish-chat-bot.vercel.app",  # exact domain, no trailing slash
-        "http://localhost:3000",               # optional for local dev
+        "https://krish-chat-bot.vercel.app",  # your Vercel frontend
+        "http://localhost:3000"               # optional for local dev
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
+    allow_methods=["*"],  # or ["GET", "POST", "OPTIONS"]
     allow_headers=["*"],
 )
 # -----------------------------
@@ -178,6 +178,18 @@ def get_db():
 # API Endpoints
 # -----------------------------
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+@app.options("/{path:path}")  # 👈 handles all OPTIONS requests
+async def preflight_handler(path: str):
+    """
+    This ensures even if CORS middleware misses, OPTIONS is handled cleanly.
+    """
+    print("Received OPTIONS preflight for:", path)
+    return Response(status_code=200)
+
+@app.get("/")
+async def root():
+    return {"message": "Backend running with CORS enabled"}
 
 @app.post("/login")
 async def login(
