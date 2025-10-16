@@ -300,6 +300,12 @@ async def login(
 
     return JSONResponse(content=response_content, status_code=200)
 
+@app.get("/get_next_user_id")
+def get_next_user_id(db: Session = Depends(get_db)):
+    last_user = db.query(User).order_by(User.id.desc()).first()
+    next_id = (last_user.id + 1) if last_user else 1
+    return next_id
+
         
 
 #----------------------functions
