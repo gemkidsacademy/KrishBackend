@@ -568,7 +568,7 @@ def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> 
         FAISS: The loaded FAISS vector store instance.
     """
     # Initialize Google Cloud Storage client
-    gcs_client = storage.Client()
+    
 
     # List all blobs under the given prefix
     blobs = list(gcs_client.list_blobs(gcs_bucket_name, prefix=gcs_prefix))
