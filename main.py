@@ -1,33 +1,48 @@
-from fastapi import FastAPI
+# FastAPI & Pydantic
+from fastapi import FastAPI, Response, Depends, HTTPException
 from pydantic import BaseModel
+
+# SQLAlchemy
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.dialects.postgresql import UUID
+
+# Password hashing
+from passlib.context import CryptContext
+from werkzeug.security import generate_password_hash
+
+# Misc
 import uuid
-from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine, Column, Integer, String, DateTime,ForeignKey,Boolean
-from sqlalchemy.orm import sessionmaker, declarative_base,relationship
+from uuid import uuid4
 from datetime import datetime
 import json
+import os
+import io
+import math
+import tempfile
+import pickle
+import numpy as np
+
+# FastAPI responses & middleware
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+
+# Google APIs
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2.service_account import Credentials
-from PyPDF2 import PdfReader
-from openai import OpenAI
-from rapidfuzz import fuzz
 from googleapiclient.errors import HttpError
 from google.cloud import storage
+
+# PDF & embeddings
+from PyPDF2 import PdfReader
+from openai import OpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
-import pickle
-import math
-import io
-import os
-import pickle
-import tempfile
-import numpy as np
-from sqlalchemy.orm import Session
-from werkzeug.security import generate_password_hash
+
+# Rapidfuzz for string matching
+from rapidfuzz import fuzz
 # -----------------------------
 # App & CORS
 # -----------------------------
@@ -150,6 +165,99 @@ with Session(engine) as session:
         print("Admin user created.")
     else:
         print("Admin user already exists.")
+
+
+def get_db():
+    """Yield a database session, ensuring it's closed after use."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        
+# -----------------------------
+# API Endpoints
+# -----------------------------
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+@app.post("/login")
+async def login(
+    login_request: LoginRequest,
+    response: Response,
+    db: Session = Depends(get_db)
+):
+    # Debug: log entire login_request data
+    print("DEBUG: Received login request data:", login_request.dict())
+    print(f"DEBUG: Received login request for username: {login_request.username}")
+
+    # Fetch user from the database
+    user = db.query(User).filter(User.username == login_request.username).first()
+    print("DEBUG: User fetched from DB:", user)
+
+    if not user:
+        print("DEBUG: No user found with that username.")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # Debug: verify password presence and compare
+    print("DEBUG: Verifying password...")
+    if not pwd_context.verify(login_request.password, user.password):
+        print("DEBUG: Invalid password provided. Expected:", user.password, "Received:", login_request.password)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    print("DEBUG: Password verified successfully.")
+
+    # Check if an active session already exists for the user
+    existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
+    print("DEBUG: Existing session fetched:", existing_session)
+
+    if existing_session:
+        session_token = existing_session.session_token
+        public_token = existing_session.public_token
+        print(f"DEBUG: Existing session found for user {user.id}: {session_token}")
+    else:
+        # Generate a new session token
+        session_token = str(uuid4())
+        public_token = str(uuid4())
+        print(f"DEBUG: Generated new session token: {session_token}")
+        print(f"DEBUG: Generated new public token: {public_token}")
+
+        # Store session in the database
+        new_session = SessionModel(
+            session_token=session_token,
+            user_id=user.id,
+            public_token=public_token
+        )
+        db.add(new_session)
+        db.commit()
+        print("DEBUG: New session stored in the database.")
+
+    # Set session cookie
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=False,  # Change to True if using HTTPS
+        samesite="Lax",
+        max_age=3600
+    )
+    print("DEBUG: Session cookie set successfully.")
+
+    # Debug: log final response content
+    response_content = {
+        "message": "Login successful",
+        "id": user.id,
+        "name": user.name,
+        "email": getattr(user, "email", None),  # optional field from User table
+        "session_token": str(session_token),
+        "public_token": str(public_token)
+    }
+    print("DEBUG: Returning response content:", response_content)
+
+    return JSONResponse(
+        content=response_content,
+        status_code=200
+    )
+
         
 
 #----------------------functions
@@ -387,96 +495,6 @@ def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> 
 
     return vs
 
-def get_db():
-    """Yield a database session, ensuring it's closed after use."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        
-# -----------------------------
-# API Endpoints
-# -----------------------------
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-@app.post("/login")
-async def login(
-    login_request: LoginRequest,
-    response: Response,
-    db: Session = Depends(get_db)
-):
-    # Debug: log entire login_request data
-    print("DEBUG: Received login request data:", login_request.dict())
-    print(f"DEBUG: Received login request for username: {login_request.username}")
-
-    # Fetch user from the database
-    user = db.query(User).filter(User.username == login_request.username).first()
-    print("DEBUG: User fetched from DB:", user)
-
-    if not user:
-        print("DEBUG: No user found with that username.")
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    # Debug: verify password presence and compare
-    print("DEBUG: Verifying password...")
-    if not pwd_context.verify(login_request.password, user.password):
-        print("DEBUG: Invalid password provided. Expected:", user.password, "Received:", login_request.password)
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    print("DEBUG: Password verified successfully.")
-
-    # Check if an active session already exists for the user
-    existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
-    print("DEBUG: Existing session fetched:", existing_session)
-
-    if existing_session:
-        session_token = existing_session.session_token
-        public_token = existing_session.public_token
-        print(f"DEBUG: Existing session found for user {user.id}: {session_token}")
-    else:
-        # Generate a new session token
-        session_token = str(uuid4())
-        public_token = str(uuid4())
-        print(f"DEBUG: Generated new session token: {session_token}")
-        print(f"DEBUG: Generated new public token: {public_token}")
-
-        # Store session in the database
-        new_session = SessionModel(
-            session_token=session_token,
-            user_id=user.id,
-            public_token=public_token
-        )
-        db.add(new_session)
-        db.commit()
-        print("DEBUG: New session stored in the database.")
-
-    # Set session cookie
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=False,  # Change to True if using HTTPS
-        samesite="Lax",
-        max_age=3600
-    )
-    print("DEBUG: Session cookie set successfully.")
-
-    # Debug: log final response content
-    response_content = {
-        "message": "Login successful",
-        "id": user.id,
-        "name": user.name,
-        "email": getattr(user, "email", None),  # optional field from User table
-        "session_token": str(session_token),
-        "public_token": str(public_token)
-    }
-    print("DEBUG: Returning response content:", response_content)
-
-    return JSONResponse(
-        content=response_content,
-        status_code=200
-    )
 
 
 SIMILARITY_THRESHOLD = 0.40  # cosine similarity threshold (adjust as needed)
