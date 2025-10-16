@@ -1,5 +1,6 @@
-import uuid
 from fastapi import FastAPI
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base,relationship
