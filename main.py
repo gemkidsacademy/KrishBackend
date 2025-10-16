@@ -91,10 +91,26 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=False)
-    phone_number = Column(String(20), nullable=True)  # phone number
-    class_name = Column(String(50), nullable=True)    # class name
-    password = Column(String(255), nullable=False)    # password (hashed)
+    phone_number = Column(String(20), nullable=True)  # optional
+    class_name = Column(String(50), nullable=True)    # optional
+    password = Column(String(255), nullable=False)    # hashed password
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Establish relationship with sessions
+    sessions = relationship("SessionModel", back_populates="user", cascade="all, delete-orphan")
+
+
+class SessionModel(Base):  # Handles authentication sessions
+    __tablename__ = "sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_token = Column(UUID(as_uuid=True), unique=True, index=True, default=uuid.uuid4)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))  # link to User
+    is_authenticated = Column(Boolean, default=False)
+    public_token = Column(UUID(as_uuid=True), unique=True, index=True, default=uuid.uuid4)
+
+    # Establish relationship back to User
+    user = relationship("User", back_populates="sessions")
     
 class LoginRequest(BaseModel):
     username: str
