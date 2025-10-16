@@ -53,14 +53,13 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://krish-chat-bot.vercel.app",
-        "https://your-other-domain.com"
+        "https://krish-chat-bot.vercel.app",  # exact domain, no trailing slash
+        "http://localhost:3000",               # optional for local dev
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
     allow_headers=["*"],
 )
-
 # -----------------------------
 # OpenAI Setup
 # -----------------------------
