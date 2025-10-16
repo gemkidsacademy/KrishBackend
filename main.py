@@ -176,10 +176,6 @@ def get_db():
 # -----------------------------
 # API Endpoints
 # -----------------------------
-pwd_context = CryptContext(
-    schemes=["bcrypt", "pbkdf2_sha256"],
-    deprecated="auto"
-)
 
 @app.options("/{path:path}")  # 👈 handles all OPTIONS requests
 async def preflight_handler(path: str):
@@ -233,18 +229,22 @@ async def login(
     # Step 3: Verify password
     print("\n--- Step 3: Verifying password ---")
     try:
-        password_verified = pwd_context.verify(password, user.password)
+        from werkzeug.security import check_password_hash
+    
+        print("DEBUG: Stored hash in DB:", user.password)
+        print("DEBUG: Password provided by user:", password)
+    
+        password_verified = check_password_hash(user.password, password)
         print("DEBUG: Password verification result:", password_verified)
     except Exception as e:
         print("ERROR during password verification:", e)
         raise HTTPException(status_code=500, detail="Password verification failed")
-
+    
     if not password_verified:
         print("==================== LOGIN ATTEMPT END (invalid password) ====================\n")
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
+    
     print("DEBUG: Password verified successfully.")
-
     # Step 4: Check for existing session
     print("\n--- Step 4: Managing session ---")
     try:
