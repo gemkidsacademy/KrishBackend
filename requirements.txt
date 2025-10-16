@@ -71,6 +71,8 @@ packaging==25.0
     # via
     #   langchain-core
     #   langsmith
+passlib==1.7.4
+    # via -r requirements.in
 pydantic==2.12.2
     # via
     #   fastapi
