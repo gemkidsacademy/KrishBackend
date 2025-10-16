@@ -69,6 +69,33 @@ gcs_client = storage.Client(credentials=Credentials.from_service_account_info(se
 gcs_bucket_name = "krishdemochatbot"
 gcs_bucket = gcs_client.bucket(gcs_bucket_name)
 
+
+#---------------- database connectivity 
+DATABASE_URL = os.environ.get("DATABASE_URL") or (
+    f"postgresql://{os.environ['PGUSER']}:{os.environ['PGPASSWORD']}@{os.environ['PGHOST']}:{os.environ['PGPORT']}/{os.environ['PGDATABASE']}"
+)
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(100), unique=True, index=True, nullable=False)
+    phone_number = Column(String(20), nullable=True)  # phone number
+    class_name = Column(String(50), nullable=True)    # class name
+    password = Column(String(255), nullable=False)    # password (hashed)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Base.metadata.create_all(bind=engine)
+
+#----------------------functions
+
 def upload_to_gcs(file_bytes, blob_name):
     blob = gcs_bucket.blob(blob_name)
     blob.upload_from_string(file_bytes)
