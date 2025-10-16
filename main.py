@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from pydantic import BaseModel
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from fastapi.responses import JSONResponse
