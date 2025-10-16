@@ -1,5 +1,5 @@
 # FastAPI & Pydantic
-from fastapi import FastAPI, Response, Depends, HTTPException
+from fastapi import FastAPI, Response, Depends, HTTPException, Query
 from pydantic import BaseModel
 from passlib.hash import pbkdf2_sha256
 
