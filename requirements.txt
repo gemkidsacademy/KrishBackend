@@ -4,6 +4,10 @@
 #
 #    pip-compile requirements.in
 #
+
+faiss-cpu==1.7.4
+    # vector store library required by langchain
+
 aiohappyeyeballs==2.6.1
     # via aiohttp
 aiohttp==3.13.0
