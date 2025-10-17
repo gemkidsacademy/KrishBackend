@@ -738,7 +738,7 @@ async def search_pdfs(
     
     # -------------------- Append result --------------------
     results.append({
-        "name": source_name,
+        "name": f"**{source_name}**",
         "snippet": answer_text,
         "link": ", ".join(used_pdfs) if source_name == "Academy Answer" else ""
     })
