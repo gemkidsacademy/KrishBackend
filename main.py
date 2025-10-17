@@ -599,15 +599,15 @@ ANSWER_MODEL = "gpt-4o-mini"
 user_contexts = {}  # user_id -> list of messages
 GIST_MAX_LENGTH = 1000
 
-def get_context_gist(user_id: str) -> str:
-    """Return a concise gist of the last few interactions for the user."""
-    if user_id not in user_contexts:
-        return ""
-    is_first_query = len(user_contexts[user_id]) == 0
-
-    # combine last few messages into a single gist string
-    combined = " ".join([entry["content"] for entry in user_contexts[user_id][-5:]])
-    return combined[:GIST_MAX_LENGTH]
+def get_context_gist(user_id, max_tokens=1000):
+    """
+    Returns previous conversation including PDF metadata for GPT context
+    """
+    context_entries = user_contexts.get(user_id, [])
+    gist = []
+    for entry in context_entries:
+        gist.append(f"{entry['role'].capitalize()}: {entry['content']}")
+    return "\n".join(gist)
 
 def classify_query_type(query: str, context_gist: str) -> str:
     """Use GPT to classify if query is context_only, pdf_only, or mixed."""
@@ -633,11 +633,18 @@ def classify_query_type(query: str, context_gist: str) -> str:
     )
     return response.choices[0].message.content.strip()
 
-def append_to_user_context(user_id: str, role: str, content: str):
-    """Add message to user context."""
+def append_to_user_context(user_id, role, content, pdf_meta=None):
+    """
+    pdf_meta: list of strings like '[PDF used: filename (Page X)]'
+    """
     if user_id not in user_contexts:
         user_contexts[user_id] = []
-    user_contexts[user_id].append({"role": role, "content": content})
+
+    entry = {"role": role, "content": content}
+    if pdf_meta:
+        entry["content"] += "\n" + "\n".join(pdf_meta)
+    user_contexts[user_id].append(entry)
+
 
 vectorstores_initialized = False
 
