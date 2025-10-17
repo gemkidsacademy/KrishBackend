@@ -624,8 +624,8 @@ def classify_query_type(query: str, context_gist: str) -> str:
 
     Respond with exactly one word: context_only, pdf_only, or mixed.
     """
-    response = openai_client.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+    response = openai_client.chat.completions.create(
+        model="REWRITER_MODEL",
         messages=[{"role": "user", "content": prompt}],
         temperature=0
     )
@@ -671,7 +671,7 @@ async def search_pdfs(
             f"Rephrase the following question to make it more specific for finding relevant sections in educational PDFs, "
             f"but keep all original key words intact: {query}"
         )
-        response = openai_client.ChatCompletion.create(
+        response = openai_client.chat.completions.create(
             model=REWRITER_MODEL,
             messages=[{"role": "user", "content": rewritten_query_prompt}],
             temperature=0.2
@@ -744,7 +744,7 @@ async def search_pdfs(
     print("==================== END GPT PROMPT ====================")
 
     # -------------------- Step 4: Call GPT --------------------
-    answer_response = openai_client.ChatCompletion.create(
+    answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
         temperature=0.2
