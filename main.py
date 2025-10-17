@@ -596,7 +596,197 @@ SIMILARITY_THRESHOLD = 0.40  # cosine similarity threshold (adjust as needed)
 TOP_K = 5  # max chunks per PDF
 REWRITER_MODEL = "gpt-4o-mini"
 ANSWER_MODEL = "gpt-4o-mini"
+user_contexts = {}  # user_id -> list of messages
+GIST_MAX_LENGTH = 1000
 
+def get_context_gist(user_id: str) -> str:
+    """Return a concise gist of the last few interactions for the user."""
+    if user_id not in user_contexts:
+        return ""
+    # combine last few messages into a single gist string
+    combined = " ".join([entry["content"] for entry in user_contexts[user_id][-5:]])
+    return combined[:GIST_MAX_LENGTH]
+
+def classify_query_type(query: str, context_gist: str) -> str:
+    """Use GPT to classify if query is context_only, pdf_only, or mixed."""
+    prompt = f"""
+    You are a classifier assistant. 
+    Determine whether the following user query requires:
+    1. Only the previous conversation context to answer (context_only)
+    2. Only new information from PDF resources (pdf_only)
+    3. Both previous context and PDFs (mixed)
+
+    Previous Context (gist):
+    {context_gist}
+
+    User Query:
+    {query}
+
+    Respond with exactly one word: context_only, pdf_only, or mixed.
+    """
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    return response.choices[0].message.content.strip()
+
+def append_to_user_context(user_id: str, role: str, content: str):
+    """Add message to user context."""
+    if user_id not in user_contexts:
+        user_contexts[user_id] = []
+    user_contexts[user_id].append({"role": role, "content": content})
+
+@app.get("/search")
+async def search_pdfs(
+    query: str = Query(..., min_length=1),
+    reasoning: str = Query("simple", regex="^(simple|medium|advanced)$"),
+    user_id: str = Query(...)
+):
+    print(f"\n==================== SEARCH REQUEST START ====================")
+    print(f"user_id: {user_id}")
+    print(f"Received query: {query}")
+    print(f"Reasoning mode: {reasoning}")
+
+    if user_id not in user_contexts:
+        user_contexts[user_id] = []
+
+    results = []
+    top_chunks = []
+
+    # -------------------- Step 0: Get gist --------------------
+    context_gist = get_context_gist(user_id)
+    query_type = classify_query_type(query, context_gist)
+    print(f"[DEBUG] Query classified as: {query_type}")
+
+    use_context_only = query_type == "context_only"
+
+    # -------------------- Step 1: If PDF needed, retrieve --------------------
+    if query_type in ("pdf_only", "mixed"):
+        pdf_files = list_pdfs(DEMO_FOLDER_ID)
+        ensure_vectorstores_for_all_pdfs(pdf_files)
+
+        # Expand query for retrieval
+        rewritten_query_prompt = (
+            f"Rephrase the following question to make it more specific for finding relevant sections in educational PDFs, "
+            f"but keep all original key words intact: {query}"
+        )
+        response = openai.ChatCompletion.create(
+            model=REWRITER_MODEL,
+            messages=[{"role": "user", "content": rewritten_query_prompt}],
+            temperature=0.2
+        )
+        rewritten_query = response.choices[0].message.content
+
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-large",
+            openai_api_key=os.environ.get("OPENAI_API_KEY")
+        )
+
+        for pdf in pdf_files:
+            pdf_name = pdf["name"]
+            pdf_base_name = pdf_name.rsplit(".", 1)[0]
+            gcs_prefix = f"{pdf_base_name}/vectorstore/"
+            vectorstore: FAISS = load_vectorstore_from_gcs(gcs_prefix, embeddings)
+            if hasattr(vectorstore, "index") and hasattr(vectorstore.index, "normalize_L2"):
+                vectorstore.index.normalize_L2()
+            docs_with_scores = vectorstore.similarity_search_with_score(rewritten_query, k=TOP_K)
+            for doc, distance_score in docs_with_scores:
+                doc.metadata.update({"pdf_name": pdf_name, "pdf_base_name": pdf_base_name})
+                top_chunks.append((doc, distance_score))
+
+        # Sort and keep top K
+        top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
+
+    # -------------------- Step 2: Prepare context text --------------------
+    context_texts = []
+    if not use_context_only and top_chunks:
+        context_texts = [
+            f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number','N/A')}\n{doc.page_content}"
+            for doc, _ in top_chunks
+        ]
+    context_texts_str = "\n".join(context_texts)
+
+    # -------------------- Step 3: Build GPT prompt --------------------
+    reasoning_instructions = {
+        "simple": "Answer concisely and clearly in simple language.",
+        "medium": "Answer in a balanced way with moderate detail.",
+        "advanced": "Provide a detailed, in-depth answer with analysis."
+    }
+    reasoning_instruction = reasoning_instructions.get(reasoning, reasoning_instructions["simple"])
+
+    gpt_prompt = ""
+    if use_context_only:
+        gpt_prompt = f"""
+        Use only the following previous conversation context to answer:
+        {context_gist}
+
+        Question: {query}
+
+        Answer concisely and clearly. Do not invent facts.
+        """
+    else:
+        gpt_prompt = f"""
+        You are an assistant. Answer the user question using the following:
+        Previous conversation context:
+        {context_gist}
+        PDF Chunks:
+        {context_texts_str}
+
+        Question: {query}
+
+        Follow instruction: {reasoning_instruction}
+        Prepend "[PDF-based answer]" if answer is fully based on PDFs, else "[GPT answer]" if answer relies on your own knowledge.
+        """
+
+    print("==================== DEBUG: GPT PROMPT ====================")
+    print(gpt_prompt[:1000])
+    print("==================== END GPT PROMPT ====================")
+
+    # -------------------- Step 4: Call GPT --------------------
+    answer_response = openai.ChatCompletion.create(
+        model=ANSWER_MODEL,
+        messages=[{"role": "user", "content": gpt_prompt}],
+        temperature=0.2
+    )
+    answer_text = answer_response.choices[0].message.content.strip()
+    print("==================== DEBUG: GPT RAW RESPONSE ====================")
+    print(answer_text[:1000])
+    print("==================== END GPT RAW RESPONSE ====================")
+
+    # -------------------- Step 5: Determine source --------------------
+    if answer_text.startswith("[PDF-based answer]"):
+        source_name = "Academy Answer"
+        answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
+    elif answer_text.startswith("[GPT answer]"):
+        source_name = "GPT Answer"
+        answer_text = answer_text.replace("[GPT answer]", "", 1).strip()
+    else:
+        source_name = "GPT Answer"
+
+    # -------------------- Step 6: Collect PDF links --------------------
+    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+
+    # -------------------- Step 7: Append to results --------------------
+    if source_name == "GPT Answer":
+        answer_text = "The answer was not found in the PDFs. " + answer_text
+
+    results.append({
+        "name": f"**{source_name}**",
+        "snippet": answer_text,
+        "link": ", ".join(used_pdfs) if source_name == "Academy Answer" else ""
+    })
+
+    # -------------------- Step 8: Update user context --------------------
+    append_to_user_context(user_id, "user", query)
+    append_to_user_context(user_id, "assistant", answer_text)
+
+    print("==================== DEBUG: USER CONTEXT ====================")
+    for i, msg in enumerate(user_contexts[user_id]):
+        print(f"{i} - role: {msg['role']}, content: {msg['content'][:200]}")
+    print("==================== SEARCH REQUEST END ====================\n")
+
+    return JSONResponse(results)
 
 
 
