@@ -296,6 +296,9 @@ def verify_otp(data: VerifyOTPRequest):
         print(f"[WARNING] OTP for {data.phone_number} has expired")
         raise HTTPException(status_code=400, detail="OTP expired")
 
+    # Debug: show what is being compared
+    print(f"[DEBUG] Comparing entered OTP '{data.otp}' with stored OTP '{record['otp']}'")
+
     # Compare entered OTP with stored OTP
     if data.otp != record["otp"]:
         print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP for {data.phone_number}")
@@ -304,7 +307,6 @@ def verify_otp(data: VerifyOTPRequest):
     # OTP is valid
     print(f"[INFO] OTP for {data.phone_number} is valid")
     return {"message": "OTP verified successfully"}
-
 
 @app.post("/login")
 async def login(
