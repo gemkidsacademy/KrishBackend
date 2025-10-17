@@ -136,7 +136,8 @@ Base = declarative_base()
 
 class OTPRequest(BaseModel):
     phone_number: str
-
+    otp: str  # <-- add this field
+    
 class User(Base):
     __tablename__ = "users"
 
