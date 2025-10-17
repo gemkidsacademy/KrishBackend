@@ -717,7 +717,11 @@ async def search_pdfs(
                 vectorstore.index.normalize_L2()
             docs_with_scores = vectorstore.similarity_search_with_score(rewritten_query, k=TOP_K)
             for doc, distance_score in docs_with_scores:
-                doc.metadata.update({"pdf_name": pdf_name, "pdf_base_name": pdf_base_name})
+                # Keep all original metadata
+                doc.metadata["pdf_name"] = pdf_name
+                doc.metadata["pdf_base_name"] = pdf_base_name
+            
+                # Do NOT reassign or rebuild the entire dict — just enrich it
                 top_chunks.append((doc, distance_score))
 
         # Sort and keep top K
