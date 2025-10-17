@@ -693,6 +693,11 @@ async def search_pdfs(
     )
     user_gist = user_gist_response.choices[0].message.content.strip()
     user_contexts[user_id].append({"role": "user", "content": user_gist})
+    print("==================== DEBUG: USER CONTEXT AFTER USER GIST ====================")
+    print(f"user_id: {user_id}")
+    for msg in user_contexts[user_id]:
+        print(f"{msg['role']}: {msg['content']}")
+    print("======================================================================")
 
     # -------------------- Step 9: Build GPT answer prompt --------------------
     answer_prompt = f"""
@@ -715,6 +720,10 @@ PDF Chunks:
     # -------------------- Step 10: Include previous context --------------------
     gpt_messages = user_contexts[user_id].copy()  # previous gists
     gpt_messages.append({"role": "user", "content": answer_prompt})
+    print("==================== DEBUG: GPT MESSAGES BEFORE API CALL ====================")
+    for i, msg in enumerate(gpt_messages):
+        print(f"{i} - role: {msg['role']}, content: {msg['content'][:200]}")  # truncate long text
+    print("======================================================================")
 
     # -------------------- Step 11: Call OpenAI API --------------------
     answer_response = openai_client.chat.completions.create(
@@ -748,6 +757,11 @@ PDF Chunks:
     )
     answer_gist = answer_gist_response.choices[0].message.content.strip()
     user_contexts[user_id].append({"role": "assistant", "content": answer_gist})
+    # Debug: check context after storing assistant's gist
+    print("==================== DEBUG: USER CONTEXT AFTER ASSISTANT GIST ====================")
+    for msg in user_contexts[user_id]:
+        print(f"{msg['role']}: {msg['content']}")
+    print("======================================================================")
 
     # -------------------- Step 14: Collect PDF links --------------------
     used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
