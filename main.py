@@ -804,31 +804,12 @@ async def search_pdfs(
 
     # -------------------- Step 7: Collect PDF links --------------------
         # -------------------- Step 7: Collect PDF links --------------------
-    used_pdfs = []
+    
     print("\n[DEBUG] ---- Collecting PDF URLs ----")
     print(f"[DEBUG] Number of top_chunks: {len(top_chunks)}")
-
-    for idx, (doc, _) in enumerate(top_chunks):
-        pdf_name = doc.metadata.get("pdf_name")
-        page_number = doc.metadata.get("page_number", 1)
-
-        print(f"[DEBUG] Chunk {idx}: pdf_name={pdf_name}, page_number={page_number}")
-
-        if pdf_name:
-            pdf_url = f"https://storage.googleapis.com/{gcs_bucket_name}/{pdf_name}#page={page_number}"
-            print(f"[DEBUG] Constructed PDF URL for {pdf_name}: {pdf_url}")
-
-            used_pdfs.append({
-                "name": pdf_name,
-                "url": pdf_url,
-                "page": page_number
-            })
-        else:
-            print(f"[DEBUG] ⚠️ Skipping chunk {idx} because pdf_name is missing")
-
-    print(f"[DEBUG] Total used_pdfs collected: {len(used_pdfs)}")
-    print(f"[DEBUG] used_pdfs content: {json.dumps(used_pdfs, indent=2)}\n")
-
+        # -------------------- Collect PDF links (same as /search) --------------------
+    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+    print(f"[DEBUG] ✅ PDF links collected (same style as /search): {used_pdfs}")    
        
 
     # -------------------- Step 8: Prepend PDF metadata if Academy Answer --------------------
@@ -838,7 +819,11 @@ async def search_pdfs(
         # Append PDF info after answer text
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
-
+    if source_name == "GPT Answer":
+        answer_text = (
+            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
+            + answer_text
+        )
     # -------------------- Step 9: Append to results --------------------
     
     results.append({
