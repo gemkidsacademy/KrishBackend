@@ -595,20 +595,7 @@ TOP_K = 5  # max chunks per PDF
 REWRITER_MODEL = "gpt-4o-mini"
 ANSWER_MODEL = "gpt-4o-mini"
 
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-import os
-from some_module import list_pdfs, ensure_vectorstores_for_all_pdfs, load_vectorstore_from_gcs
-from langchain.embeddings.openai import OpenAIEmbeddings
-from faiss import FAISS
-import openai_client
 
-app = FastAPI()
-
-TOP_K = 5
-DEMO_FOLDER_ID = "your_demo_folder_id"
-REWRITER_MODEL = "gpt-3.5-turbo"
-ANSWER_MODEL = "gpt-4"
 
 @app.get("/search")
 async def search_pdfs(
