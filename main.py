@@ -805,16 +805,16 @@ async def search_pdfs(
     # -------------------- Step 7: Collect PDF links --------------------
     used_pdfs = []
     for doc, _ in top_chunks:
-    pdf_name = doc.metadata.get("pdf_name")
-    page_number = doc.metadata.get("page_number", 1)
-    if pdf_name:
-        pdf_url = f"https://storage.googleapis.com/{gcs_bucket_name}/{pdf_name}#page={page_number}"
-        used_pdfs.append({
-            "name": pdf_name,
-            "url": pdf_url,
-            "page": page_number
-        })
-   
+        pdf_name = doc.metadata.get("pdf_name")
+        page_number = doc.metadata.get("page_number", 1)
+        if pdf_name:
+            pdf_url = f"https://storage.googleapis.com/{gcs_bucket_name}/{pdf_name}#page={page_number}"
+            used_pdfs.append({
+                "name": pdf_name,
+                "url": pdf_url,
+                "page": page_number
+            })
+       
 
     # -------------------- Step 8: Prepend PDF metadata if Academy Answer --------------------
     if source_name == "Academy Answer" and top_chunks:
