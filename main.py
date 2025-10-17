@@ -603,6 +603,8 @@ def get_context_gist(user_id: str) -> str:
     """Return a concise gist of the last few interactions for the user."""
     if user_id not in user_contexts:
         return ""
+    is_first_query = len(user_contexts[user_id]) == 0
+
     # combine last few messages into a single gist string
     combined = " ".join([entry["content"] for entry in user_contexts[user_id][-5:]])
     return combined[:GIST_MAX_LENGTH]
@@ -637,6 +639,8 @@ def append_to_user_context(user_id: str, role: str, content: str):
         user_contexts[user_id] = []
     user_contexts[user_id].append({"role": role, "content": content})
 
+vectorstores_initialized = False
+
 @app.get("/search")
 async def search_pdfs(
     query: str = Query(..., min_length=1),
@@ -658,13 +662,19 @@ async def search_pdfs(
     context_gist = get_context_gist(user_id)
     query_type = classify_query_type(query, context_gist)
     print(f"[DEBUG] Query classified as: {query_type}")
-
+    
+    # Force first query to not be context_only
+    if is_first_query:
+        query_type = "pdf_only"  # ensures GPT uses PDFs and prepends [PDF-based answer]
+    
     use_context_only = query_type == "context_only"
-
     # -------------------- Step 1: If PDF needed, retrieve --------------------
     if query_type in ("pdf_only", "mixed"):
         pdf_files = list_pdfs(DEMO_FOLDER_ID)
-        ensure_vectorstores_for_all_pdfs(pdf_files)
+        if not vectorstores_initialized:
+            ensure_vectorstores_for_all_pdfs(pdf_files)
+            vectorstores_initialized = True
+        
 
         # Expand query for retrieval
         rewritten_query_prompt = (
