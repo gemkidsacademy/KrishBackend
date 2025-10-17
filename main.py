@@ -246,23 +246,54 @@ async def root():
     return {"message": "Backend running with CORS enabled"}
 
 @app.post("/send-otp")
-def send_otp_endpoint(data: OTPRequest):
-    otp = generate_otp()
-    otp_store[data.phone_number] = {"otp": otp, "expiry": time.time() + 300}  # 5 min expiry
-    try:
-        send_otp_sms(data.phone_number, otp)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error sending SMS: {e}")
-    return {"message": "OTP sent successfully"}
+def send_otp_endpoint(data: OTPRequest, db: Session = Depends(get_db)):
+    print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
 
+    # Check if the phone number exists in the database
+    user = db.query(User).filter(User.phone_number == data.phone_number).first()
+    if not user:
+        print(f"[WARNING] Phone number {data.phone_number} not found in database")
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    
+    print(f"[DEBUG] Phone number {data.phone_number} exists. User ID: {user.id}, Name: {user.name}")
+
+    # Generate OTP
+    otp = generate_otp()
+    print(f"[DEBUG] Generated OTP {otp} for phone number {data.phone_number}")
+
+    # Store OTP with expiry
+    otp_store[data.phone_number] = {"otp": otp, "expiry": time.time() + 300}  # 5 min expiry
+    print(f"[DEBUG] Stored OTP for {data.phone_number} with 5 min expiry")
+
+    # Send OTP via Twilio
+    try:
+        print(f"[DEBUG] Attempting to send OTP to {data.phone_number} via Twilio")
+        send_otp_sms(data.phone_number, otp)
+        print(f"[INFO] Successfully sent OTP to {data.phone_number}")
+    except Exception as e:
+        print(f"[ERROR] Error sending OTP to {data.phone_number}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error sending SMS: {e}")
+
+    return {"message": "OTP sent successfully"}
+    
 # Optional: endpoint to verify OTP
 @app.post("/verify-otp")
 def verify_otp(data: OTPRequest):
+    print(f"[DEBUG] Received OTP verification request for phone number: {data.phone_number}")
+
+    # Retrieve OTP record from memory
     record = otp_store.get(data.phone_number)
     if not record:
+        print(f"[WARNING] No OTP record found for {data.phone_number}")
         raise HTTPException(status_code=400, detail="OTP not sent")
+
+    # Check if OTP has expired
     if time.time() > record["expiry"]:
+        print(f"[WARNING] OTP for {data.phone_number} has expired")
         raise HTTPException(status_code=400, detail="OTP expired")
+
+    # OTP is valid
+    print(f"[INFO] OTP for {data.phone_number} is valid: {record['otp']}")
     return {"otp": record["otp"], "message": "OTP is valid"}  # for testing only
 
 
