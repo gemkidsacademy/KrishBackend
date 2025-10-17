@@ -699,14 +699,31 @@ async def search_pdfs(
         top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
 
     # -------------------- Step 2: Prepare context text --------------------
-    context_texts = []
-    if not use_context_only and top_chunks:
-        # Include PDF name and page in GPT messages
-        context_texts = [
-            f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number','N/A')}\n{doc.page_content}"
-            for doc, _ in top_chunks
-        ]
+    # -------------------- Prepare context from top chunks --------------------
+    context_texts = [
+        f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
+        for doc, _ in top_chunks
+    ]
     context_texts_str = "\n".join(context_texts)
+    
+    # -------------------- Build GPT Prompt --------------------
+    answer_prompt = f"""
+    You are an assistant. Answer the user question using the following PDF chunks.
+    
+    Important:
+    - For every fact you use from the PDFs, include the PDF name and page number exactly as provided.
+    - If the PDFs provide enough information to answer the question, prepend "[PDF-based answer]" at the beginning.
+    - If the PDFs do not contain sufficient information, you may answer from your own knowledge but still indicate any PDF facts you refer to. Prepend "[GPT answer]" at the beginning.
+    - Do NOT omit PDF metadata for facts included from the PDFs.
+    - Do NOT start your answer with 'Answer:'.
+    
+    Follow this instruction for style: {reasoning_instruction}
+    
+    Question: {query}
+    
+    PDF Chunks:
+    {context_texts_str}
+    """
 
     # -------------------- Step 3: Build GPT prompt --------------------
     reasoning_instructions = {
