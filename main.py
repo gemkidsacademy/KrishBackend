@@ -726,16 +726,25 @@ async def search_pdfs(
     else:
         gpt_prompt = f"""
         You are an assistant. Answer the user question using the following:
+        
         Previous conversation context:
         {context_gist}
+        
         PDF Chunks:
         {context_texts_str}
-
+        
         Question: {query}
-
-        Follow instruction: {reasoning_instruction}
-        Prepend "[PDF-based answer]" if answer is fully based on PDFs, else "[GPT answer]" if answer relies on your own knowledge.
+        
+        Instructions:
+        1. ONLY use PDF chunks if the answer is based on them.
+        2. Do NOT invent facts from the PDFs.
+        3. Prepend your answer with exactly one of these tags:
+           - "[PDF-based answer]" → if the answer is based entirely or mostly on the PDF chunks.
+           - "[GPT answer]" → if the answer relies on your own knowledge because PDFs do not provide enough information.
+        4. Make sure the tag appears as the very first text of your answer.
+        5. Follow this instruction for style: {reasoning_instruction}
         """
+
 
     print("==================== DEBUG: GPT PROMPT ====================")
     print(gpt_prompt[:1000])
