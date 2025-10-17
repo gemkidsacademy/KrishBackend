@@ -595,112 +595,113 @@ TOP_K = 5  # max chunks per PDF
 REWRITER_MODEL = "gpt-4o-mini"
 ANSWER_MODEL = "gpt-4o-mini"
 
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
+import os
+from some_module import list_pdfs, ensure_vectorstores_for_all_pdfs, load_vectorstore_from_gcs
+from langchain.embeddings.openai import OpenAIEmbeddings
+from faiss import FAISS
+import openai_client
+
+app = FastAPI()
+
+TOP_K = 5
+DEMO_FOLDER_ID = "your_demo_folder_id"
+REWRITER_MODEL = "gpt-3.5-turbo"
+ANSWER_MODEL = "gpt-4"
+
 @app.get("/search")
-async def search_pdfs(query: str = Query(..., min_length=1)):
+async def search_pdfs(
+    query: str = Query(..., min_length=1),
+    reasoning: str = Query("simple", regex="^(simple|medium|advanced)$")  # new parameter
+):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"Received query: {query}")
+    print(f"Reasoning mode: {reasoning}")
 
     results = []
     top_chunks = []
 
     # 1️⃣ List PDFs and ensure vector stores exist
-    print("\n--- Step 1: Listing PDFs and ensuring vectorstores ---")
     pdf_files = list_pdfs(DEMO_FOLDER_ID)
-    print(f"Found PDFs: {[pdf['name'] for pdf in pdf_files]}")
-
     ensure_vectorstores_for_all_pdfs(pdf_files)
-    print("Ensured all vectorstores exist for PDFs.")
 
     # 2️⃣ Expand the query for better retrieval
     rewritten_query_prompt = (
         f"Rephrase the following question to make it more specific for finding relevant sections in educational PDFs, "
         f"but keep all the original key words and phrases intact: {query}"
     )
-    print("\n--- Step 2: Rewriting query ---")
-    print(f"Prompt to rewriter model: {rewritten_query_prompt}")
-
     response = openai_client.chat.completions.create(
         model=REWRITER_MODEL,
         messages=[{"role": "user", "content": rewritten_query_prompt}],
         temperature=0.2
     )
     rewritten_query = response.choices[0].message.content
-    print(f"Rewritten query for retrieval: {rewritten_query}")
 
     # 3️⃣ Initialize embeddings
-    print("\n--- Step 3: Initializing embeddings ---")
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-large",
         openai_api_key=os.environ.get("OPENAI_API_KEY_S")
     )
-    print("Embeddings initialized successfully.")
 
     # 4️⃣ Retrieve relevant chunks from each PDF
-    print("\n--- Step 4: Retrieving relevant chunks ---")
     for pdf in pdf_files:
         pdf_name = pdf["name"]
         pdf_base_name = pdf_name.rsplit(".", 1)[0]
         gcs_prefix = f"{pdf_base_name}/vectorstore/"
 
-        print(f"\nProcessing PDF: {pdf_name}, vectorstore prefix: {gcs_prefix}")
-
-        # Load vector store
         vectorstore: FAISS = load_vectorstore_from_gcs(gcs_prefix, embeddings)
-        print("Vectorstore loaded.")
 
-        # Normalize embeddings in FAISS index if available
         if hasattr(vectorstore, "index") and hasattr(vectorstore.index, "normalize_L2"):
             vectorstore.index.normalize_L2()
-            print("Vectorstore embeddings normalized.")
 
-        # Similarity search with scores
         docs_with_scores = vectorstore.similarity_search_with_score(rewritten_query, k=TOP_K)
-        print(f"Retrieved {len(docs_with_scores)} chunks from this PDF.")
-
-        # Collect all chunks with their distance
         for doc, distance_score in docs_with_scores:
             doc.metadata.update({
                 "pdf_name": pdf_name,
                 "pdf_base_name": pdf_base_name
             })
             top_chunks.append((doc, distance_score))
-            print(f"Chunk added: page {doc.metadata.get('page_number', 'N/A')}, distance={distance_score}")
 
-    # 5️⃣ Early return if no chunks found
     if not top_chunks:
-        print("No chunks found for query.")
         results.append({"name": "No results found", "snippet": "", "link": ""})
         return JSONResponse(results)
 
-    # 6️⃣ Sort by ascending distance (least distance = most relevant)
+    # 5️⃣ Sort by relevance
     top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
-    print(f"\nTop {TOP_K} chunks selected after sorting by relevance.")
 
-    # 7️⃣ Prepare context for GPT answer
+    # 6️⃣ Prepare context and adjust answer prompt based on reasoning mode
     context_texts = [
         f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
         for doc, _ in top_chunks
     ]
+
+    # Adjust answer style by reasoning
+    reasoning_instructions = {
+        "simple": "Answer concisely, clearly, and in simple language suitable for quick understanding.",
+        "medium": "Answer in a balanced way with moderate detail, including examples if helpful.",
+        "advanced": "Provide a detailed, in-depth answer, analyzing nuances and technical aspects."
+    }
+    reasoning_instruction = reasoning_instructions.get(reasoning, reasoning_instructions["simple"])
+
     answer_prompt = f"""
 You are an assistant. Answer the user question using only the following PDF chunks.
 For each fact, indicate the PDF name and page number it came from.
+Use the reasoning style instruction: {reasoning_instruction}
 
 Question: {query}
 Chunks:
 {chr(10).join(context_texts)}
 """
-    print("\n--- Step 7: Sending context to GPT for answer ---")
+
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": answer_prompt}],
         temperature=0.2
     )
     answer_text = answer_response.choices[0].message.content
-    print(f"Generated answer: {answer_text[:200]}...")  # print first 200 chars
 
-    # 8️⃣ Collect PDF links used
     used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
-    print(f"PDF links included in answer: {used_pdfs}")
 
     results.append({
         "name": "Answer",
@@ -710,6 +711,7 @@ Chunks:
 
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse(results)
+
 
 
 # -----------------------------
