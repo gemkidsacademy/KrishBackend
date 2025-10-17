@@ -808,7 +808,7 @@ async def search_pdfs(
     pdf_name = doc.metadata.get("pdf_name")
     page_number = doc.metadata.get("page_number", 1)
     if pdf_name:
-        pdf_url = f"https://storage.googleapis.com/YOUR_BUCKET_NAME/{pdf_name}#page={page_number}"
+        pdf_url = f"https://storage.googleapis.com/{gcs_bucket_name}/{pdf_name}#page={page_number}"
         used_pdfs.append({
             "name": pdf_name,
             "url": pdf_url,
