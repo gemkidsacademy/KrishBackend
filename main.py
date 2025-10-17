@@ -718,11 +718,13 @@ async def search_pdfs(
         gpt_prompt = f"""
         Use only the following previous conversation context to answer:
         {context_gist}
-
+        
         Question: {query}
-
+        
         Answer concisely and clearly. Do not invent facts.
+        Prepend "[PDF-based answer]" if the answer is fully based on PDFs, else "[GPT answer]" if the answer relies on your own knowledge.
         """
+
     else:
         gpt_prompt = f"""
         You are an assistant. Answer the user question using the following:
