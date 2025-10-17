@@ -300,8 +300,8 @@ def verify_otp(data: VerifyOTPRequest):
     print(f"[DEBUG] Comparing entered OTP '{data.otp}' with stored OTP '{record['otp']}'")
 
     # Compare entered OTP with stored OTP
-    if data.otp != record["otp"]:
-        print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP for {data.phone_number}")
+    if str(data.otp) != str(record["otp"]):
+        print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP ({record['otp']})")
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
     # OTP is valid
