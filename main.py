@@ -699,33 +699,13 @@ async def search_pdfs(
         top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
 
     # -------------------- Step 2: Prepare context text --------------------
-    # -------------------- Prepare context from top chunks --------------------
     context_texts = [
         f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
         for doc, _ in top_chunks
     ]
     context_texts_str = "\n".join(context_texts)
-    
-    # -------------------- Build GPT Prompt --------------------
-    answer_prompt = f"""
-    You are an assistant. Answer the user question using the following PDF chunks.
-    
-    Important:
-    - For every fact you use from the PDFs, include the PDF name and page number exactly as provided.
-    - If the PDFs provide enough information to answer the question, prepend "[PDF-based answer]" at the beginning.
-    - If the PDFs do not contain sufficient information, you may answer from your own knowledge but still indicate any PDF facts you refer to. Prepend "[GPT answer]" at the beginning.
-    - Do NOT omit PDF metadata for facts included from the PDFs.
-    - Do NOT start your answer with 'Answer:'.
-    
-    Follow this instruction for style: {reasoning_instruction}
-    
-    Question: {query}
-    
-    PDF Chunks:
-    {context_texts_str}
-    """
 
-    # -------------------- Step 3: Build GPT prompt --------------------
+    # -------------------- Step 3: Reasoning instructions --------------------
     reasoning_instructions = {
         "simple": "Answer concisely and clearly in simple language.",
         "medium": "Answer in a balanced way with moderate detail.",
@@ -733,7 +713,7 @@ async def search_pdfs(
     }
     reasoning_instruction = reasoning_instructions.get(reasoning, reasoning_instructions["simple"])
 
-    gpt_prompt = ""
+    # -------------------- Step 4: Build GPT Prompt --------------------
     if use_context_only:
         gpt_prompt = f"""
         Use only the following previous conversation context to answer:
@@ -761,7 +741,7 @@ async def search_pdfs(
     print(gpt_prompt[:1000])
     print("==================== END GPT PROMPT ====================")
 
-    # -------------------- Step 4: Call GPT --------------------
+    # -------------------- Step 5: Call GPT --------------------
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
@@ -772,7 +752,7 @@ async def search_pdfs(
     print(answer_text[:1000])
     print("==================== END GPT RAW RESPONSE ====================")
 
-    # -------------------- Step 5: Determine source --------------------
+    # -------------------- Step 6: Determine source --------------------
     if answer_text.startswith("[PDF-based answer]"):
         source_name = "Academy Answer"
         answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
@@ -782,18 +762,17 @@ async def search_pdfs(
     else:
         source_name = "GPT Answer"
 
-    # -------------------- Step 6: Collect PDF links --------------------
+    # -------------------- Step 7: Collect PDF links --------------------
     used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
 
-    # -------------------- Step 7: Append to results --------------------
-    # Removed forced "The answer was not found in the PDFs" prefix
+    # -------------------- Step 8: Append to results --------------------
     results.append({
         "name": f"**{source_name}**",
         "snippet": answer_text,
         "link": ", ".join(used_pdfs) if source_name == "Academy Answer" else ""
     })
 
-    # -------------------- Step 8: Update user context --------------------
+    # -------------------- Step 9: Update user context --------------------
     append_to_user_context(user_id, "user", query)
     append_to_user_context(user_id, "assistant", answer_text)
 
