@@ -608,42 +608,43 @@ user_contexts: dict[str, list[dict[str, str]]] = {}
 async def search_pdfs(
     query: str = Query(..., min_length=1),
     reasoning: str = Query("simple", regex="^(simple|medium|advanced)$"),
-    user_id: str = Query(...),  # Pass doctorData.name from frontend
+    user_id: str = Query(..., min_length=1)  # e.g., doctorData.name from frontend
 ):
     print("\n==================== SEARCH REQUEST START ====================")
-    print(f"Received query from user {user_id}: {query}")
+    print(f"User: {user_id}")
+    print(f"Received query: {query}")
     print(f"Reasoning mode: {reasoning}")
 
     results = []
     top_chunks = []
 
-    # Initialize user context if first request
+    # -------------------- Initialize user context --------------------
     if user_id not in user_contexts:
         user_contexts[user_id] = []
 
-    # 1️⃣ List PDFs and ensure vector stores exist
+    # -------------------- Step 1: List PDFs and ensure vector stores exist --------------------
     pdf_files = list_pdfs(DEMO_FOLDER_ID)
     ensure_vectorstores_for_all_pdfs(pdf_files)
 
-    # 2️⃣ Expand the query for better retrieval
+    # -------------------- Step 2: Rewrite query for better retrieval --------------------
     rewritten_query_prompt = (
         f"Rephrase the following question to make it more specific for finding relevant sections in educational PDFs, "
-        f"but keep all original keywords intact: {query}"
+        f"but keep all the original key words and phrases intact: {query}"
     )
-    rewritten_response = openai_client.chat.completions.create(
+    response = openai_client.chat.completions.create(
         model=REWRITER_MODEL,
         messages=[{"role": "user", "content": rewritten_query_prompt}],
         temperature=0.2
     )
-    rewritten_query = rewritten_response.choices[0].message.content
+    rewritten_query = response.choices[0].message.content.strip()
 
-    # 3️⃣ Initialize embeddings
+    # -------------------- Step 3: Initialize embeddings --------------------
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-large",
         openai_api_key=os.environ.get("OPENAI_API_KEY_S")
     )
 
-    # 4️⃣ Retrieve relevant chunks from PDFs
+    # -------------------- Step 4: Retrieve relevant chunks from each PDF --------------------
     for pdf in pdf_files:
         pdf_name = pdf["name"]
         pdf_base_name = pdf_name.rsplit(".", 1)[0]
@@ -655,17 +656,20 @@ async def search_pdfs(
 
         docs_with_scores = vectorstore.similarity_search_with_score(rewritten_query, k=TOP_K)
         for doc, distance_score in docs_with_scores:
-            doc.metadata.update({"pdf_name": pdf_name, "pdf_base_name": pdf_base_name})
+            doc.metadata.update({
+                "pdf_name": pdf_name,
+                "pdf_base_name": pdf_base_name
+            })
             top_chunks.append((doc, distance_score))
 
     if not top_chunks:
         results.append({"name": "No results found", "snippet": "", "link": ""})
         return JSONResponse(results)
 
-    # 5️⃣ Sort by relevance
+    # -------------------- Step 5: Sort by relevance --------------------
     top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
 
-    # 6️⃣ Prepare reasoning instructions
+    # -------------------- Step 6: Prepare reasoning instructions --------------------
     reasoning_instructions = {
         "simple": "Answer concisely, clearly, and in simple language suitable for quick understanding.",
         "medium": "Answer in a balanced way with moderate detail, including examples if helpful.",
@@ -673,33 +677,32 @@ async def search_pdfs(
     }
     reasoning_instruction = reasoning_instructions.get(reasoning, reasoning_instructions["simple"])
 
-    # 7️⃣ Prepare context from top chunks
+    # -------------------- Step 7: Prepare context from top chunks --------------------
     context_texts = [
         f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
         for doc, _ in top_chunks
     ]
     context_texts_str = "\n".join(context_texts)
 
-    # 8️⃣ Summarize user query to store in context
+    # -------------------- Step 8: Create gist of user query --------------------
     user_gist_prompt = f"Summarize this user query in 1 sentence, keeping key info: {query}"
-    user_gist_resp = openai_client.chat.completions.create(
-        model=ANSWER_MODEL,
+    user_gist_response = openai_client.chat.completions.create(
+        model=REWRITER_MODEL,
         messages=[{"role": "user", "content": user_gist_prompt}],
-        temperature=0.2
+        temperature=0
     )
-    user_gist = user_gist_resp.choices[0].message.content.strip()
+    user_gist = user_gist_response.choices[0].message.content.strip()
     user_contexts[user_id].append({"role": "user", "content": user_gist})
 
-    # 9️⃣ Build GPT messages including previous context
-    gpt_messages = user_contexts[user_id].copy() + [{
-        "role": "user",
-        "content": f"""
+    # -------------------- Step 9: Build GPT answer prompt --------------------
+    answer_prompt = f"""
 You are an assistant. Answer the user question using the following PDF chunks.
-For each fact, indicate the PDF name and page number it came from.
 
-Important:
-- If the PDFs provide enough information, prepend [PDF-based answer]
-- Otherwise, prepend [GPT answer]
+Instructions:
+- Only prepend [PDF-based answer] if the answer is strictly derived from the PDF chunks provided.
+- If the PDFs do not contain enough information, use your own knowledge and prepend [GPT answer].
+- Do NOT mix PDF references in [GPT answer].
+- For each fact derived from PDFs, list PDF name and page number separately, do not embed in the answer text.
 
 Follow this instruction for style: {reasoning_instruction}
 Do NOT start your answer with 'Answer:'.
@@ -708,9 +711,12 @@ Question: {query}
 PDF Chunks:
 {context_texts_str}
 """
-    }]
 
-    # 1️⃣0️⃣ Call GPT
+    # -------------------- Step 10: Include previous context --------------------
+    gpt_messages = user_contexts[user_id].copy()  # previous gists
+    gpt_messages.append({"role": "user", "content": answer_prompt})
+
+    # -------------------- Step 11: Call OpenAI API --------------------
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=gpt_messages,
@@ -718,37 +724,36 @@ PDF Chunks:
     )
     answer_text = answer_response.choices[0].message.content.strip()
 
-    # 1️⃣1️⃣ Generate a concise gist of the answer for context
-    gist_prompt = f"""
-Summarize the following assistant answer in 1-3 sentences focusing on the key facts and useful points for future reference.
-Do not include filler words.
-
-Answer: {answer_text}
-"""
-    gist_response = openai_client.chat.completions.create(
-        model=ANSWER_MODEL,
-        messages=[{"role": "user", "content": gist_prompt}],
-        temperature=0.2
-    )
-    answer_gist = gist_response.choices[0].message.content.strip()
-
-    # 1️⃣2️⃣ Store the gist in context
-    user_contexts[user_id].append({"role": "assistant", "content": answer_gist})
-
-    # 1️⃣3️⃣ Determine source based on GPT tag
+    # -------------------- Step 12: Determine source robustly --------------------
     if answer_text.startswith("[PDF-based answer]"):
-        source_name = "Academy Answer"
-        answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
+        pdf_mentioned = any(doc.metadata['pdf_name'] in answer_text for doc, _ in top_chunks)
+        if pdf_mentioned:
+            source_name = "Academy Answer"
+            answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
+        else:
+            source_name = "GPT Answer"
+            answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
     elif answer_text.startswith("[GPT answer]"):
         source_name = "GPT Answer"
         answer_text = answer_text.replace("[GPT answer]", "", 1).strip()
     else:
         source_name = "GPT Answer"
 
-    # 1️⃣4️⃣ Collect PDF links
-    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+    # -------------------- Step 13: Create gist of assistant answer --------------------
+    answer_gist_prompt = f"Summarize this assistant answer in 1-3 sentences: {answer_text}"
+    answer_gist_response = openai_client.chat.completions.create(
+        model=REWRITER_MODEL,
+        messages=[{"role": "user", "content": answer_gist_prompt}],
+        temperature=0
+    )
+    answer_gist = answer_gist_response.choices[0].message.content.strip()
+    user_contexts[user_id].append({"role": "assistant", "content": answer_gist})
 
-    # 1️⃣5️⃣ Append final result
+    # -------------------- Step 14: Collect PDF links --------------------
+    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+    pdf_links = ", ".join(used_pdfs) if source_name == "Academy Answer" else ""
+
+    # -------------------- Step 15: Append final result --------------------
     if source_name == "GPT Answer":
         answer_text = (
             "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
@@ -758,12 +763,11 @@ Answer: {answer_text}
     results.append({
         "name": f"**{source_name}**",
         "snippet": answer_text,
-        "link": ", ".join(used_pdfs) if source_name == "Academy Answer" else ""
+        "link": pdf_links
     })
 
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse(results)
-
 
 
 
