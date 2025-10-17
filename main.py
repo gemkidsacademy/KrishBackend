@@ -803,17 +803,32 @@ async def search_pdfs(
         source_name = "GPT Answer"
 
     # -------------------- Step 7: Collect PDF links --------------------
+        # -------------------- Step 7: Collect PDF links --------------------
     used_pdfs = []
-    for doc, _ in top_chunks:
+    print("\n[DEBUG] ---- Collecting PDF URLs ----")
+    print(f"[DEBUG] Number of top_chunks: {len(top_chunks)}")
+
+    for idx, (doc, _) in enumerate(top_chunks):
         pdf_name = doc.metadata.get("pdf_name")
         page_number = doc.metadata.get("page_number", 1)
+
+        print(f"[DEBUG] Chunk {idx}: pdf_name={pdf_name}, page_number={page_number}")
+
         if pdf_name:
             pdf_url = f"https://storage.googleapis.com/{gcs_bucket_name}/{pdf_name}#page={page_number}"
+            print(f"[DEBUG] Constructed PDF URL for {pdf_name}: {pdf_url}")
+
             used_pdfs.append({
                 "name": pdf_name,
                 "url": pdf_url,
                 "page": page_number
             })
+        else:
+            print(f"[DEBUG] ⚠️ Skipping chunk {idx} because pdf_name is missing")
+
+    print(f"[DEBUG] Total used_pdfs collected: {len(used_pdfs)}")
+    print(f"[DEBUG] used_pdfs content: {json.dumps(used_pdfs, indent=2)}\n")
+
        
 
     # -------------------- Step 8: Prepend PDF metadata if Academy Answer --------------------
