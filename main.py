@@ -658,11 +658,6 @@ async def search_pdfs(
     top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
 
     # 6️⃣ Prepare context and adjust answer prompt based on reasoning mode
-    context_texts = [
-        f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
-        for doc, _ in top_chunks
-    ]
-
     # Adjust answer style by reasoning
     reasoning_instructions = {
         "simple": "Answer concisely, clearly, and in simple language suitable for quick understanding.",
@@ -670,32 +665,55 @@ async def search_pdfs(
         "advanced": "Provide a detailed, in-depth answer, analyzing nuances and technical aspects."
     }
     reasoning_instruction = reasoning_instructions.get(reasoning, reasoning_instructions["simple"])
-
-    answer_prompt = f"""
-You are an assistant. Answer the user question using only the following PDF chunks.
-For each fact, indicate the PDF name and page number it came from.
-Use the reasoning style instruction: {reasoning_instruction}
-
-Question: {query}
-Chunks:
-{chr(10).join(context_texts)}
-"""
-
+    
+    if top_chunks:
+        context_texts = [
+            f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
+            for doc, _ in top_chunks
+        ]
+        context_texts_str = "\n".join(context_texts)
+        answer_prompt = f"""
+    You are an assistant. Answer the user question using only the following PDF chunks.
+    For each fact, indicate the PDF name and page number it came from.
+    Follow this instruction for style: {reasoning_instruction}
+    Do NOT start your answer with 'Answer:'.
+    
+    Question: {query}
+    Chunks:
+    {context_texts_str}
+    """
+        source_name = "Academy Answer"
+    else:
+        # No chunks found, GPT can answer freely
+        answer_prompt = f"""
+        You are an assistant. No relevant PDF content was found.
+        Clearly indicate to the user that the context to answer the question was not found in the PDFs, 
+        and provide your answer using your own knowledge.
+        Follow this instruction for style: {reasoning_instruction}
+        Do NOT start your answer with 'Answer:'.
+        
+        Question: {query}
+        """
+        source_name = "GPT Answer"
+    
+    # Call OpenAI API
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": answer_prompt}],
         temperature=0.2
     )
     answer_text = answer_response.choices[0].message.content
-
+    
+    # Collect PDF links if any
     used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
-
+    
+    # Append result
     results.append({
-        "name": "Answer",
+        "name": source_name,
         "snippet": answer_text,
-        "link": ", ".join(used_pdfs)
+        "link": ", ".join(used_pdfs) if top_chunks else ""
     })
-
+    
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse(results)
 
