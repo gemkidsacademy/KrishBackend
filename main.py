@@ -767,10 +767,8 @@ async def search_pdfs(
 
     # -------------------- Step 8: Prepend PDF metadata if Academy Answer --------------------
     if source_name == "Academy Answer":
-        answer_text_with_metadata = ""
-        for doc, _ in top_chunks:
-            answer_text_with_metadata += f"[PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number','N/A')}] {doc.page_content}\n"
-        answer_text = answer_text_with_metadata.strip()
+        pdf_list = "\n".join(f"- {doc.metadata['pdf_name']} (Page {doc.metadata.get('page_number', 'N/A')})" for doc, _ in top_chunks)
+        answer_text = f"PDFs used:\n{pdf_list}\n\n" + answer_text
 
     # -------------------- Step 9: Append to results --------------------
     
