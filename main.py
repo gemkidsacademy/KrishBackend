@@ -737,6 +737,12 @@ async def search_pdfs(
     print(f"PDF links collected: {used_pdfs}")
     
     # -------------------- Append result --------------------
+    if source_name == "GPT Answer":
+        answer_text = (
+            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
+            + answer_text
+        )
+
     results.append({
         "name": f"**{source_name}**",
         "snippet": answer_text,
