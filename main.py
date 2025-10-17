@@ -814,7 +814,7 @@ async def search_pdfs(
     results.append({
         "name": f"**{source_name}**",
         "snippet": answer_text,
-        "link": ", ".join(used_pdfs) if source_name == "Academy Answer" else ""
+        "links": used_pdfs if source_name == "Academy Answer" else []
     })
 
     # -------------------- Step 9: Update user context --------------------
