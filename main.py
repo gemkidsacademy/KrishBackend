@@ -374,6 +374,11 @@ async def login(
             if user.name in user_contexts:
                 user_contexts[user.name] = []
                 print(f"DEBUG: Cleared previous context for user {user.name}")
+            # Clear previous OTP for this user
+            if user.phone_number in otp_store:
+                del otp_store[user.phone_number]
+                print(f"DEBUG: Cleared previous OTP for {user.phone_number}")
+
         else:
             print("DEBUG: No session found, creating a new one...")
             session_token = str(uuid4())
