@@ -274,6 +274,9 @@ async def login(
             print(f"DEBUG: Existing session found for user {user.id}")
             session_token = existing_session.session_token
             public_token = existing_session.public_token
+            if user.username in user_contexts:
+                user_contexts[user.username] = []
+                print(f"DEBUG: Cleared previous context for user {user.username}")
         else:
             print("DEBUG: No session found, creating a new one...")
             session_token = str(uuid4())
@@ -287,9 +290,7 @@ async def login(
             db.commit()
             print("DEBUG: New session created successfully.")
 
-            if user.username in user_contexts:
-                user_contexts[user.username] = []
-                print(f"DEBUG: Cleared previous context for user {user.username}")
+            
     except Exception as e:
         print("ERROR during session handling:", e)
         raise HTTPException(status_code=500, detail="Session handling failed")
