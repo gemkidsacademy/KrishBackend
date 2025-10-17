@@ -625,7 +625,7 @@ def classify_query_type(query: str, context_gist: str) -> str:
     Respond with exactly one word: context_only, pdf_only, or mixed.
     """
     response = openai_client.chat.completions.create(
-        model="REWRITER_MODEL",
+        model=REWRITER_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0
     )
