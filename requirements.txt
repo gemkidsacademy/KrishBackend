@@ -7,6 +7,8 @@
 
 faiss-cpu==1.7.4
     # vector store library required by langchain
+twilio==8.14.1
+    #for twilio api
 
 aiohappyeyeballs==2.6.1
     # via aiohttp
