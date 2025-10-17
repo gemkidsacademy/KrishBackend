@@ -671,7 +671,7 @@ async def search_pdfs(
             f"Rephrase the following question to make it more specific for finding relevant sections in educational PDFs, "
             f"but keep all original key words intact: {query}"
         )
-        response = openai.ChatCompletion.create(
+        response = openai_client.ChatCompletion.create(
             model=REWRITER_MODEL,
             messages=[{"role": "user", "content": rewritten_query_prompt}],
             temperature=0.2
@@ -744,7 +744,7 @@ async def search_pdfs(
     print("==================== END GPT PROMPT ====================")
 
     # -------------------- Step 4: Call GPT --------------------
-    answer_response = openai.ChatCompletion.create(
+    answer_response = openai_client.ChatCompletion.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
         temperature=0.2
