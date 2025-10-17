@@ -46,6 +46,7 @@ from langchain.vectorstores import FAISS
 from rapidfuzz import fuzz
 #global dictionary gpt maintains context in the conversation
 user_contexts: dict[str, list[dict[str, str]]] = {}
+
 # -----------------------------
 # App & CORS
 # -----------------------------
@@ -217,6 +218,7 @@ async def login(
     db: Session = Depends(get_db)
 ):
     print("\n==================== LOGIN ATTEMPT START ====================")
+    global user_contexts
 
     # Step 1: Log the incoming data
     try:
@@ -601,7 +603,7 @@ SIMILARITY_THRESHOLD = 0.40  # cosine similarity threshold (adjust as needed)
 TOP_K = 5  # max chunks per PDF
 REWRITER_MODEL = "gpt-4o-mini"
 ANSWER_MODEL = "gpt-4o-mini"
-user_contexts = {}  # user_id -> list of messages
+  # user_id -> list of messages
 GIST_MAX_LENGTH = 1000
 
 def get_context_gist(user_id, max_tokens=1000):
