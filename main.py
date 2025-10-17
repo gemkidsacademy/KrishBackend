@@ -659,6 +659,7 @@ async def search_pdfs(
 
     # 6️⃣ Prepare context and adjust answer prompt based on reasoning mode
     # Adjust answer style by reasoning
+        # -------------------- Reasoning Instructions --------------------
     reasoning_instructions = {
         "simple": "Answer concisely, clearly, and in simple language suitable for quick understanding.",
         "medium": "Answer in a balanced way with moderate detail, including examples if helpful.",
@@ -666,14 +667,24 @@ async def search_pdfs(
     }
     reasoning_instruction = reasoning_instructions.get(reasoning, reasoning_instructions["simple"])
     
-    # Prepare context from all top chunks
+    # -------------------- DEBUG LOG: Basic Info --------------------
+    print("==================== DEBUG LOG START ====================")
+    print(f"Reasoning level: {reasoning}")
+    print(f"Reasoning instruction: {reasoning_instruction}")
+    print(f"User query: {query}")
+    
+    # -------------------- Prepare context from top chunks --------------------
     context_texts = [
         f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
         for doc, _ in top_chunks
     ]
     context_texts_str = "\n".join(context_texts)
+    print(f"Number of top chunks: {len(top_chunks)}")
+    print("==================== TOP CHUNKS CONTEXT ====================")
+    print(context_texts_str[:2000])  # print first 2000 chars to avoid huge logs
+    print("==================== END TOP CHUNKS CONTEXT ====================")
     
-    # Prompt instructs GPT to decide whether it can answer from PDFs or needs its own knowledge
+    # -------------------- Build GPT Prompt --------------------
     answer_prompt = f"""
     You are an assistant. Answer the user question using the following PDF chunks.
     For each fact, indicate the PDF name and page number it came from.
@@ -692,7 +703,11 @@ async def search_pdfs(
     {context_texts_str}
     """
     
-    # Call OpenAI API
+    print("==================== GPT PROMPT ====================")
+    print(answer_prompt[:1000])  # print first 1000 chars of prompt
+    print("==================== END GPT PROMPT ====================")
+    
+    # -------------------- Call OpenAI API --------------------
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": answer_prompt}],
@@ -700,7 +715,11 @@ async def search_pdfs(
     )
     answer_text = answer_response.choices[0].message.content.strip()
     
-    # Determine source based on GPT’s prepended tag
+    print("==================== GPT RAW RESPONSE ====================")
+    print(answer_text[:1000])  # print first 1000 chars of GPT output
+    print("==================== END GPT RAW RESPONSE ====================")
+    
+    # -------------------- Determine source based on GPT’s tag --------------------
     if answer_text.startswith("[PDF-based answer]"):
         source_name = "Academy Answer"
         answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
@@ -708,13 +727,16 @@ async def search_pdfs(
         source_name = "GPT Answer"
         answer_text = answer_text.replace("[GPT answer]", "", 1).strip()
     else:
-        # fallback in case GPT ignores the tag
+        # fallback if GPT ignores the tag
         source_name = "GPT Answer"
     
-    # Collect PDF links
-    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+    print(f"Determined source: {source_name}")
     
-    # Append result
+    # -------------------- Collect PDF links --------------------
+    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+    print(f"PDF links collected: {used_pdfs}")
+    
+    # -------------------- Append result --------------------
     results.append({
         "name": source_name,
         "snippet": answer_text,
@@ -723,6 +745,7 @@ async def search_pdfs(
     
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse(results)
+
 
 
 
