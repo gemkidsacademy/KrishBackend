@@ -651,7 +651,7 @@ async def search_pdfs(
     print(f"user_id: {user_id}")
     print(f"Received query: {query}")
     print(f"Reasoning mode: {reasoning}")
-
+    global vectorstores_initialized
     if user_id not in user_contexts:
         user_contexts[user_id] = []
 
