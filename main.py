@@ -134,10 +134,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-class OTPRequest(BaseModel):
+class SendOTPRequest(BaseModel):
     phone_number: str
-    otp: str  # <-- add this field
-    
+
+class VerifyOTPRequest(BaseModel):
+    phone_number: str
+    otp: str
+
 class User(Base):
     __tablename__ = "users"
 
@@ -247,7 +250,7 @@ async def root():
     return {"message": "Backend running with CORS enabled"}
 
 @app.post("/send-otp")
-def send_otp_endpoint(data: OTPRequest, db: Session = Depends(get_db)):
+def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
 
     # Check if the phone number exists in the database
@@ -279,7 +282,7 @@ def send_otp_endpoint(data: OTPRequest, db: Session = Depends(get_db)):
     
 # Optional: endpoint to verify OTP
 @app.post("/verify-otp")
-def verify_otp(data: OTPRequest):
+def verify_otp(data: VerifyOTPRequest):
     print(f"[DEBUG] Received OTP verification request for phone number: {data.phone_number}")
 
     # Retrieve OTP record from memory
