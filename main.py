@@ -680,7 +680,7 @@ async def search_pdfs(
 
         embeddings = OpenAIEmbeddings(
             model="text-embedding-3-large",
-            openai_api_key=os.environ.get("OPENAI_API_KEY")
+            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
 
         for pdf in pdf_files:
