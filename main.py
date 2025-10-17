@@ -776,11 +776,11 @@ async def search_pdfs(
 
     # -------------------- Step 8: Prepend PDF metadata if Academy Answer --------------------
     if source_name == "Academy Answer" and top_chunks:
-        top_doc, _ = top_chunks[0]  # only take the most relevant chunk
-        answer_text = (
-            f"[PDF used: {top_doc.metadata['pdf_name']} (Page {top_doc.metadata.get('page_number','N/A')})]\n"
-            + answer_text
-        )
+        top_doc, _ = top_chunks[0]  # take the most relevant chunk
+        pdf_metadata = f"[PDF used: {top_doc.metadata['pdf_name']} (Page {top_doc.metadata.get('page_number','N/A')})]"
+        # Append PDF info after answer text
+        answer_text = f"{answer_text}\n{pdf_metadata}"
+
 
     # -------------------- Step 9: Append to results --------------------
     
