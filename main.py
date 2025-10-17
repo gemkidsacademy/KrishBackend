@@ -280,9 +280,8 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
 
     return {"message": "OTP sent successfully"}
     
-# Optional: endpoint to verify OTP
 @app.post("/verify-otp")
-def verify_otp(data: VerifyOTPRequest):
+def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Received OTP verification request for phone number: {data.phone_number}")
 
     # Retrieve OTP record from memory
@@ -291,22 +290,35 @@ def verify_otp(data: VerifyOTPRequest):
         print(f"[WARNING] No OTP record found for {data.phone_number}")
         raise HTTPException(status_code=400, detail="OTP not sent")
 
-    # Check if OTP has expired
     if time.time() > record["expiry"]:
         print(f"[WARNING] OTP for {data.phone_number} has expired")
         raise HTTPException(status_code=400, detail="OTP expired")
 
-    # Debug: show what is being compared
     print(f"[DEBUG] Comparing entered OTP '{data.otp}' with stored OTP '{record['otp']}'")
-
-    # Compare entered OTP with stored OTP
     if str(data.otp) != str(record["otp"]):
         print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP ({record['otp']})")
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
     # OTP is valid
     print(f"[INFO] OTP for {data.phone_number} is valid")
-    return {"message": "OTP verified successfully"}
+
+    # Fetch user info from database
+    user = db.query(User).filter(User.phone_number == data.phone_number).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user_info = {
+        "id": user.id,
+        "name": user.name,
+        "phone_number": user.phone_number,
+        # optionally add session_token or other fields if needed
+    }
+
+    # Clear OTP from memory after successful verification
+    del otp_store[data.phone_number]
+    print(f"[DEBUG] Cleared OTP for {data.phone_number} after successful verification")
+
+    return {"message": "OTP verified successfully", "user": user_info}
 
 @app.post("/login")
 async def login(
