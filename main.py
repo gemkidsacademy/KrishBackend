@@ -1,3 +1,9 @@
+import random
+import time
+from dotenv import load_dotenv
+
+#Twilio API
+from twilio.rest import Client
 # FastAPI & Pydantic
 from fastapi import FastAPI, Response, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -47,9 +53,21 @@ from rapidfuzz import fuzz
 #global dictionary gpt maintains context in the conversation
 user_contexts: dict[str, list[dict[str, str]]] = {}
 
+
+
+#-------------------------------- for Twilio
+account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+twilio_number = os.getenv("TWILIO_PHONE_NUMBER")
+client = Client(account_sid, auth_token)
+# Temporary in-memory OTP storage
+otp_store = {}
+
+
 # -----------------------------
 # App & CORS
 # -----------------------------
+load_dotenv()
 app = FastAPI()
 
 
@@ -115,6 +133,9 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+class OTPRequest(BaseModel):
+    phone_number: str
 
 class User(Base):
     __tablename__ = "users"
@@ -194,10 +215,23 @@ def get_db():
         yield db
     finally:
         db.close()
-        
+
+# Generate OTP
+def generate_otp():
+    return random.randint(100000, 999999)
+
+# Send OTP SMS
+def send_otp_sms(phone_number: str, otp: int):
+    message = client.messages.create(
+        body=f"Your OTP code is {otp}",
+        from_=twilio_number,
+        to=phone_number
+    )
+    print(f"Sent OTP {otp} to {phone_number}, SID: {message.sid}")
 # -----------------------------
 # API Endpoints
 # -----------------------------
+
 
 @app.options("/{path:path}")  # 👈 handles all OPTIONS requests
 async def preflight_handler(path: str):
@@ -210,6 +244,27 @@ async def preflight_handler(path: str):
 @app.get("/")
 async def root():
     return {"message": "Backend running with CORS enabled"}
+
+@app.post("/send-otp")
+def send_otp_endpoint(data: OTPRequest):
+    otp = generate_otp()
+    otp_store[data.phone_number] = {"otp": otp, "expiry": time.time() + 300}  # 5 min expiry
+    try:
+        send_otp_sms(data.phone_number, otp)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error sending SMS: {e}")
+    return {"message": "OTP sent successfully"}
+
+# Optional: endpoint to verify OTP
+@app.post("/verify-otp")
+def verify_otp(data: OTPRequest):
+    record = otp_store.get(data.phone_number)
+    if not record:
+        raise HTTPException(status_code=400, detail="OTP not sent")
+    if time.time() > record["expiry"]:
+        raise HTTPException(status_code=400, detail="OTP expired")
+    return {"otp": record["otp"], "message": "OTP is valid"}  # for testing only
+
 
 @app.post("/login")
 async def login(
