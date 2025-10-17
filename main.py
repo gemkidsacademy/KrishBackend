@@ -286,6 +286,10 @@ async def login(
             db.add(new_session)
             db.commit()
             print("DEBUG: New session created successfully.")
+
+            if user.username in user_contexts:
+                user_contexts[user.username] = []
+                print(f"DEBUG: Cleared previous context for user {user.username}")
     except Exception as e:
         print("ERROR during session handling:", e)
         raise HTTPException(status_code=500, detail="Session handling failed")
