@@ -660,6 +660,7 @@ async def search_pdfs(
 
     # -------------------- Step 0: Get gist --------------------
     context_gist = get_context_gist(user_id)
+    is_first_query = len(user_contexts[user_id]) == 0
     query_type = classify_query_type(query, context_gist)
     print(f"[DEBUG] Query classified as: {query_type}")
     
