@@ -597,27 +597,8 @@ TOP_K = 5  # max chunks per PDF
 REWRITER_MODEL = "gpt-4o-mini"
 ANSWER_MODEL = "gpt-4o-mini"
 
-from fastapi import Query
-from fastapi.responses import JSONResponse
 
-# Global dictionary to store per-user conversation context
-user_contexts: dict[str, list[dict[str, str]]] = {}
-# Each entry: {"role": "user"/"assistant", "content": "gist text"}
 
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-import os
-from typing import Dict, List
-from some_embedding_module import OpenAIEmbeddings
-from some_faiss_module import load_vectorstore_from_gcs, FAISS
-from your_pdf_module import list_pdfs, ensure_vectorstores_for_all_pdfs
-from your_openai_module import openai_client, REWRITER_MODEL, ANSWER_MODEL
-
-TOP_K = 5
-DEMO_FOLDER_ID = "your_demo_folder_id"
-user_contexts: Dict[str, List[Dict[str, str]]] = {}
-
-app = FastAPI()
 
 @app.get("/search")
 async def search_pdfs(
