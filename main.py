@@ -831,6 +831,14 @@ async def search_pdfs(
         "snippet": answer_text,
         "links": used_pdfs if source_name == "Academy Answer" else []
     })
+    print(f"[DEBUG] Appending result for source_name: {source_name}")
+    print(f"[DEBUG]   name   : **{source_name}**")
+    print(f"[DEBUG]   snippet: {answer_text[:100]}{'...' if len(answer_text) > 100 else ''}")  # first 100 chars
+    if source_name == "Academy Answer":
+        print(f"[DEBUG]   links  : {used_pdfs}")  # show full list of PDFs
+    else:
+        print(f"[DEBUG]   links  : []")
+    print("[DEBUG] -------------------------------")
 
     # -------------------- Step 9: Update user context --------------------
     append_to_user_context(user_id, "user", query)
