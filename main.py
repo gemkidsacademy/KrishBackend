@@ -775,9 +775,12 @@ async def search_pdfs(
     used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
 
     # -------------------- Step 8: Prepend PDF metadata if Academy Answer --------------------
-    if source_name == "Academy Answer":
-        pdf_list = "\n".join(f"- {doc.metadata['pdf_name']} (Page {doc.metadata.get('page_number', 'N/A')})" for doc, _ in top_chunks)
-        answer_text = f"PDFs used:\n{pdf_list}\n\n" + answer_text
+    if source_name == "Academy Answer" and top_chunks:
+        top_doc, _ = top_chunks[0]  # only take the most relevant chunk
+        answer_text = (
+            f"[PDF used: {top_doc.metadata['pdf_name']} (Page {top_doc.metadata.get('page_number','N/A')})]\n"
+            + answer_text
+        )
 
     # -------------------- Step 9: Append to results --------------------
     
