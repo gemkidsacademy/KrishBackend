@@ -276,8 +276,8 @@ async def login(
             print(f"DEBUG: Existing session found for user {user.id}")
             session_token = existing_session.session_token
             public_token = existing_session.public_token
-            if user.username in user_contexts:
-                user_contexts[user.username] = []
+            if user.name in user_contexts:
+                user_contexts[user.name] = []
                 print(f"DEBUG: Cleared previous context for user {user.username}")
         else:
             print("DEBUG: No session found, creating a new one...")
