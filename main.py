@@ -502,10 +502,16 @@ def download_pdf(file_id):
     fh.seek(0)
     return fh.read()
 
-def list_pdfs(folder_id, level=0):
+def list_pdfs(folder_id, path=""):
+    """
+    Recursively list PDFs from Google Drive and track folder path.
+    Returns a list of dicts with 'id', 'name', 'webViewLink', and 'path'.
+    Includes detailed debug print statements.
+    """
     results = []
-    indent = "  " * level
     page_token = None
+
+    print(f"DEBUG: Starting to list files in folder_id='{folder_id}' with path='{path}'")
 
     while True:
         response = drive_service.files().list(
@@ -515,23 +521,49 @@ def list_pdfs(folder_id, level=0):
             pageToken=page_token
         ).execute()
 
-        for file in response.get('files', []):
-            if file['mimeType'] == 'application/pdf':
+        files = response.get('files', [])
+        print(f"DEBUG: Retrieved {len(files)} files from folder_id='{folder_id}'")
+
+        for file in files:
+            file_id = file['id']
+            file_name = file['name']
+            mime_type = file['mimeType']
+            web_view_link = file.get('webViewLink', '')
+
+            if mime_type == 'application/pdf':
+                pdf_path = f"{path}/{file_name}".lstrip("/")
                 results.append({
-                    "id": file['id'],
-                    "name": file['name'],
-                    "webViewLink": file.get('webViewLink', ''),
-                    "parent_id": folder_id
+                    "id": file_id,
+                    "name": file_name,
+                    "webViewLink": web_view_link,
+                    "path": pdf_path
                 })
-            elif file['mimeType'] == 'application/vnd.google-apps.folder':
-                results.extend(list_pdfs(file['id'], level + 1))
+                print(f"DEBUG: Found PDF -> id: {file_id}, name: '{file_name}', path: '{pdf_path}'")
+
+            elif mime_type == 'application/vnd.google-apps.folder':
+                folder_path = f"{path}/{file_name}".lstrip("/")
+                print(f"DEBUG: Found folder -> id: {file_id}, name: '{file_name}', path: '{folder_path}'")
+                # Recursively list PDFs inside this folder
+                nested_results = list_pdfs(file_id, folder_path)
+                results.extend(nested_results)
+                print(f"DEBUG: Completed folder '{folder_path}', found {len(nested_results)} PDFs inside")
+
+            else:
+                print(f"DEBUG: Skipping file -> id: {file_id}, name: '{file_name}', mimeType: '{mime_type}'")
 
         page_token = response.get('nextPageToken', None)
+        if page_token:
+            print(f"DEBUG: Next page token detected, continuing listing for folder_id='{folder_id}'")
+        else:
+            print(f"DEBUG: No more pages in folder_id='{folder_id}', finishing listing")
+
         if not page_token:
             break
 
+    print(f"DEBUG: Finished listing folder_id='{folder_id}', total PDFs found so far: {len(results)}")
     return results
 
+    
 def summarize_with_openai(snippet: str, query: str) -> str:
     prompt = f"""
     You are an educational assistant.
@@ -574,111 +606,105 @@ def upload_vectorstore_to_drive(vectorstore_bytes, vs_name, folder_id):
 # Keep track of PDFs processed in this run
 processed_pdfs = set()
 def create_vectorstore_for_pdf(pdf_file):
-    """
-    Create a vector store for a single PDF and upload it to the correct GCS bucket.
-    Each chunk includes metadata: page number, chunk index, and Google Drive link.
-    Skips processing if the PDF already exists in the bucket.
-    Embeddings are normalized so FAISS similarity scores are in [0, 1] (cosine similarity).
-    """
-
     pdf_name = pdf_file.get("name")
-    pdf_base_name = pdf_name.replace(".pdf", "")
+    pdf_id = pdf_file.get("id")
+    pdf_path = pdf_file.get("path")  # <-- full folder path from Drive
     pdf_link = pdf_file.get("webViewLink", "")
 
-    # Check if PDF already exists in GCS
-    pdf_blob_name = f"{pdf_base_name}/{pdf_name}"
-    if gcs_bucket.blob(pdf_blob_name).exists():
-        print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping upload.")
-        return
-
-    # Download PDF bytes from Drive
-    pdf_id = pdf_file.get("id")
     if pdf_id is None:
         print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
         return
+
+    # Check if PDF already exists in GCS
+    if gcs_bucket.blob(pdf_path).exists():
+        print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping upload.")
+        return
+
+    # Download PDF
     file_bytes = download_pdf(pdf_id)
     reader = PdfReader(io.BytesIO(file_bytes))
 
-    # Prepare chunks with metadata
+    # Create chunks with metadata (same as before)
     chunks = []
-    print(f"[DEBUG] Processing PDF: {pdf_name}, Total pages: {len(reader.pages)}")
     for i, page in enumerate(reader.pages, start=1):
         page_text = page.extract_text()
         if page_text and page_text.strip():
-            cleaned_text = " ".join(
-                line.strip() for line in page_text.splitlines() if line.strip()
-            )
-
-            # Semantic chunking: larger chunk size with overlap
+            cleaned_text = " ".join(line.strip() for line in page_text.splitlines() if line.strip())
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=800,
                 chunk_overlap=250,
                 separators=["\n\n", "\n", " "]
             )
             page_chunks = text_splitter.create_documents([cleaned_text])
-
             for j, chunk in enumerate(page_chunks, start=1):
                 chunk.metadata.update({
                     "pdf_name": pdf_name,
-                    "pdf_base_name": pdf_base_name,
                     "page_number": i,
                     "chunk_index": j,
-                    "pdf_link": pdf_link,
-                    "chunk_length": len(chunk.page_content)
+                    "pdf_link": pdf_link
                 })
                 chunks.append(chunk)
-                print(f"[DEBUG] Chunk added: PDF={pdf_name}, Page={i}, Chunk={j}, Text sample='{chunk.page_content[:100]}...'")
 
     if not chunks:
         print(f"[DEBUG] No text found in PDF {pdf_name}, skipping vector store creation.")
         return
 
-    # Create embeddings using a strong model
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-large",
-        openai_api_key=os.environ.get("OPENAI_API_KEY_S")
-    )
-
-    # Create FAISS vector store
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-large", openai_api_key=os.environ.get("OPENAI_API_KEY_S"))
     vs = FAISS.from_documents(chunks, embeddings)
-    print(f"[DEBUG] FAISS vector store created for PDF {pdf_name}, Total chunks: {len(chunks)}")
+    vs.index.normalize_L2()  # optional: normalize embeddings
 
-    # 🔹 Normalize embeddings so FAISS returns cosine similarity in [0,1]
-    if hasattr(vs, "index") and hasattr(vs.index, "normalize_L2"):
-        vs.index.normalize_L2()
-        print("[DEBUG] FAISS embeddings normalized (unit vectors) for cosine similarity.")
-
-    # Inspect embedding vectors for a few chunks
-    for idx, doc in enumerate(chunks[:5]):
-        vec = embeddings.embed_query(doc.page_content)
-        norm = sum([v**2 for v in vec])**0.5
-        print(f"[DEBUG] Embedding vector sample for chunk {idx+1}: Norm={norm:.4f}, Text sample='{doc.page_content[:80]}...'")
-
-    # Save locally and upload vector store files to GCS
-    gcs_prefix_vs = f"{pdf_base_name}/vectorstore/"
+    # Save vector store to GCS using same folder structure
+    gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore/"
     with tempfile.TemporaryDirectory() as tmp_dir:
         vs.save_local(tmp_dir)
         for filename in os.listdir(tmp_dir):
             path = os.path.join(tmp_dir, filename)
-            with open(path, "rb") as f:
-                blob_name = f"{gcs_prefix_vs}{filename}"
-                upload_to_gcs(f.read(), blob_name)
-                print(f"[DEBUG] Uploaded vector store file to GCS: {blob_name}")
+            blob_name = f"{gcs_prefix_vs}{filename}"
+            upload_to_gcs(open(path, "rb").read(), blob_name)
+            print(f"[DEBUG] Uploaded vector store file to GCS: {blob_name}")
 
-    # Upload original PDF to GCS
-    upload_to_gcs(file_bytes, pdf_blob_name)
-    print(f"[DEBUG] Uploaded PDF to GCS: {pdf_blob_name}")
-    print(f"[INFO] Vector store and PDF for {pdf_name} uploaded successfully to GCS.")
+    # Upload original PDF
+    upload_to_gcs(file_bytes, pdf_path)
+    print(f"[INFO] Uploaded PDF and vector store for {pdf_name} to GCS.")
 
 
 
 
 
+
+
+processed_pdfs = set()  # Keep track of PDFs processed in this session
 
 def ensure_vectorstores_for_all_pdfs(pdf_files):
+    """
+    Ensures vector stores are created for all PDFs in the provided list.
+    Uses GCS existence checks and session memory to avoid duplicate work.
+    """
     for pdf in pdf_files:
+        pdf_id = pdf.get("id")
+        pdf_path = pdf.get("path")  # Full folder path from Drive
+
+        if not pdf_id:
+            print(f"[DEBUG] PDF {pdf.get('name', 'Unknown')} has no Drive ID. Skipping.")
+            continue
+
+        # Skip if already processed in this session
+        if pdf_id in processed_pdfs:
+            print(f"[DEBUG] PDF {pdf.get('name')} already processed in this session. Skipping.")
+            continue
+
+        # Skip if PDF already exists in GCS
+        if gcs_bucket.blob(pdf_path).exists():
+            print(f"[DEBUG] PDF {pdf.get('name')} already exists in GCS. Skipping.")
+            processed_pdfs.add(pdf_id)
+            continue
+
+        # Create vector store for this PDF
         create_vectorstore_for_pdf(pdf)
 
+        # Mark as processed in memory
+        processed_pdfs.add(pdf_id)
+        
 def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
     Downloads the FAISS vector store files from a GCS prefix and loads the vector store.
@@ -800,6 +826,10 @@ async def search_pdfs(
     # -------------------- Step 1: If PDF needed, retrieve --------------------
     if query_type in ("pdf_only", "mixed"):
         pdf_files = list_pdfs(DEMO_FOLDER_ID)
+         # 🔹 Debug: print folder-aware paths of all PDFs
+        print("[DEBUG] PDF files retrieved from Google Drive:")
+        for pdf in pdf_files:
+            print(f"Name: {pdf['name']}, Path: {pdf['path']}, ID: {pdf['id']}")
         if not vectorstores_initialized:
             ensure_vectorstores_for_all_pdfs(pdf_files)
             vectorstores_initialized = True
