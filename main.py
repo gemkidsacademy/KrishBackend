@@ -257,26 +257,38 @@ async def preflight_handler(path: str):
 async def root():
     return {"message": "Backend running with CORS enabled"}
 
-@app.get("/api/usage")
+@app.get("/api/usage", response_model=list[UsageResponse])
 def get_openai_usage(days: int = 30):
+    """
+    Retrieve OpenAI API usage for the past `days` days using openai_client.
+    """
     try:
-        # Example start/end logic
-        end_date = datetime.utcnow()
-        start_date = end_date - timedelta(days=days)
+        start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        end_date = datetime.utcnow().strftime("%Y-%m-%d")
 
-        # If OpenAI usage API is unavailable, mock it or use stored data
-        usage_data = {
-            "total_requests": 1250,
-            "total_tokens": 56000,
-            "period": f"{start_date.date()} to {end_date.date()}"
-        }
+        # Make a raw API call to the usage endpoint using openai_client's http client
+        response = openai_client._client.get(
+            f"https://api.openai.com/v1/usage?start_date={start_date}&end_date={end_date}"
+        )
 
-        return {"status": "success", "usage": usage_data}
+        data = response.json()
+
+        if "data" not in data:
+            return [{"date": "N/A", "amount_usd": 0, "type": "No usage data"}]
+
+        result = [
+            {
+                "date": item.get("aggregation_timestamp", "Unknown"),
+                "amount_usd": item.get("cost", 0),
+                "type": item.get("object", "usage")
+            }
+            for item in data["data"]
+        ]
+
+        return result
 
     except Exception as e:
-        print(f"Error in get_openai_usage: {e}")
-        return {"status": "error", "message": str(e)}
-        
+        return [{"date": "N/A", "amount_usd": 0, "type": f"Error: {str(e)}"}]        
 @app.post("/send-otp")
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
