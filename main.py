@@ -348,7 +348,7 @@ async def login(
     try:
         user = db.query(User).filter(User.name == name).first()
         if user:
-            print(f"DEBUG: Found user -> ID={user.id}, Name={user.name}")
+            print(f"DEBUG: Found user -> ID={user.id}, Name={user.name}, Class={user.class_name}")
         else:
             print("DEBUG: No user found with that name.")
     except Exception as e:
@@ -434,6 +434,7 @@ async def login(
         "id": user.id,
         "name": user.name,
         "email": user.email,
+        "class_name": user.class_name,       # added class_name
         "session_token": str(session_token),  # convert to string
         "public_token": str(public_token)     # convert to string
     }
