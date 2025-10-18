@@ -856,19 +856,7 @@ def append_to_user_context(user_id, role, content, pdf_meta=None):
 
 vectorstores_initialized = False
 
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-import os
-from some_embedding_lib import OpenAIEmbeddings
-from some_vectorstore_lib import FAISS, load_vectorstore_from_gcs
-from some_utils import list_pdfs, ensure_vectorstores_for_all_pdfs, classify_query_type, get_context_gist, append_to_user_context
 
-app = FastAPI()
-
-TOP_K = 5
-vectorstores_initialized = False
-user_contexts = {}
-DEMO_FOLDER_ID = "your_demo_folder_id_here"
 
 @app.get("/search")
 async def search_pdfs(
