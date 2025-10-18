@@ -939,7 +939,12 @@ async def search_pdfs(
         for pdf in pdf_files:
             pdf_name = pdf["name"]
             pdf_base_name = pdf_name.rsplit(".", 1)[0]
-            gcs_prefix = f"{pdf_base_name}/vectorstore/"
+            # Build the GCS prefix using full folder path
+            gcs_prefix = os.path.join(os.path.dirname(pdf_file["path"]), "vectorstore") + "/"
+            
+            # 🔹 Debug print to confirm the path
+            print(f"[DEBUG] Loading vector store from GCS with prefix: '{gcs_prefix}'")
+            print(f"[DEBUG] Full PDF path from Drive: '{pdf_file['path']}'")
             vectorstore: FAISS = load_vectorstore_from_gcs(gcs_prefix, embeddings)
             if hasattr(vectorstore, "index") and hasattr(vectorstore.index, "normalize_L2"):
                 vectorstore.index.normalize_L2()
