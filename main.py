@@ -860,7 +860,8 @@ vectorstores_initialized = False
 async def search_pdfs(
     query: str = Query(..., min_length=1),
     reasoning: str = Query("simple", regex="^(simple|medium|advanced)$"),
-    user_id: str = Query(...)
+    user_id: str = Query(...),
+    class_name: str = Query(None)  # New optional query parameter
 ):
     print(f"\n==================== SEARCH REQUEST START ====================")
     print(f"user_id: {user_id}")
@@ -885,16 +886,38 @@ async def search_pdfs(
     
     use_context_only = query_type == "context_only"
     # -------------------- Step 1: If PDF needed, retrieve --------------------
-    if query_type in ("pdf_only", "mixed"):
-        pdf_files = list_pdfs(DEMO_FOLDER_ID)
-         # 🔹 Debug: print folder-aware paths of all PDFs
-        print("[DEBUG] PDF files retrieved from Google Drive:")
+    # -------------------- Step 1: If PDF needed, retrieve --------------------
+    print(f"[DEBUG] Entering PDF retrieval step. query_type={query_type}, class_name={class_name}")
+    
+    if query_type in ("pdf_only", "mixed") and class_name:
+        print("[DEBUG] Listing all PDFs from Drive...")
+        all_pdf_files = list_pdfs(DEMO_FOLDER_ID)
+        print(f"[DEBUG] Total PDFs found in Drive: {len(all_pdf_files)}")
+    
+        # 🔹 Filter PDFs by the user's class folder
+        pdf_files = [
+            pdf for pdf in all_pdf_files
+            if pdf.get("path", "").lower().startswith(class_name.lower())
+        ]
+    
+        # 🔹 Debug: show filtered PDFs for this class
+        print(f"[DEBUG] PDFs matching class '{class_name}': {len(pdf_files)}")
         for pdf in pdf_files:
-            print(f"Name: {pdf['name']}, Path: {pdf['path']}, ID: {pdf['id']}")
+            print(f"[DEBUG]   Name: {pdf['name']}, Path: {pdf['path']}, ID: {pdf['id']}")
+    
         if not vectorstores_initialized:
+            print("[DEBUG] Ensuring vectorstores exist for the filtered PDFs...")
             ensure_vectorstores_for_all_pdfs(pdf_files)
             vectorstores_initialized = True
-        
+            print("[DEBUG] Vectorstores initialization complete.")
+    
+        # If no PDFs found for class, fallback to GPT knowledge
+        if not pdf_files:
+            print(f"[WARNING] No PDFs found for class '{class_name}'. Falling back to GPT knowledge only.")
+            use_context_only = True
+    else:
+        print(f"[DEBUG] Skipping PDF retrieval: query_type={query_type}, class_name={class_name}")
+    
 
         # Expand query for retrieval
         rewritten_query_prompt = (
