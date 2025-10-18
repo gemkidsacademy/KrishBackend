@@ -261,34 +261,41 @@ async def root():
 def get_openai_usage(days: int = 30):
     """
     Retrieve OpenAI API usage for the past `days` days using openai_client.
+    Parses nested line_items to extract cost.
     """
     try:
         start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
         end_date = datetime.utcnow().strftime("%Y-%m-%d")
 
-        # Make a raw API call to the usage endpoint using openai_client's http client
         response = openai_client._client.get(
             f"https://api.openai.com/v1/usage?start_date={start_date}&end_date={end_date}"
         )
 
         data = response.json()
 
-        if "data" not in data:
+        if "data" not in data or not data["data"]:
             return [{"date": "N/A", "amount_usd": 0, "type": "No usage data"}]
 
-        result = [
-            {
-                "date": item.get("aggregation_timestamp", "Unknown"),
-                "amount_usd": item.get("cost", 0),
-                "type": item.get("object", "usage")
-            }
-            for item in data["data"]
-        ]
+        result = []
+        for item in data["data"]:
+            timestamp = item.get("aggregation_timestamp")
+            date_str = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d") if timestamp else "Unknown"
+
+            # Sum costs from line_items if available
+            line_items = item.get("line_items", [])
+            total_cost = sum(li.get("cost", 0) for li in line_items)
+
+            result.append({
+                "date": date_str,
+                "amount_usd": round(total_cost, 4),
+                "type": "usage"
+            })
 
         return result
 
     except Exception as e:
-        return [{"date": "N/A", "amount_usd": 0, "type": f"Error: {str(e)}"}]        
+        return [{"date": "N/A", "amount_usd": 0, "type": f"Error: {str(e)}"}]
+        
 @app.post("/send-otp")
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
