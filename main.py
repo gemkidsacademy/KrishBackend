@@ -888,7 +888,7 @@ async def search_pdfs(
     # -------------------- Step 1: If PDF needed, retrieve --------------------
     # -------------------- Step 1: If PDF needed, retrieve --------------------
     print(f"[DEBUG] Entering PDF retrieval step. query_type={query_type}, class_name={class_name}")
-    
+    pdf_files = []
     if query_type in ("pdf_only", "mixed") and class_name:
         print("[DEBUG] Listing all PDFs from Drive...")
         all_pdf_files = list_pdfs(DEMO_FOLDER_ID)
@@ -1066,7 +1066,12 @@ async def search_pdfs(
             + answer_text
         )
     # -------------------- Step 9: Append to results --------------------
-    
+    if not source_name:
+        source_name = "GPT Answer"
+        answer_text = (
+            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
+            + answer_text
+        )
     results.append({
         "name": f"**{source_name}**",
         "snippet": answer_text,
