@@ -135,6 +135,11 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+class UsageResponse(BaseModel):
+    date: str
+    amount_usd: float
+    type: str
+
 class SendOTPRequest(BaseModel):
     phone_number: str
 
@@ -235,6 +240,7 @@ def send_otp_sms(phone_number: str, otp: int):
     print(f"Sent OTP {otp} to {phone_number}, SID: {message.sid}")
 # -----------------------------
 # API Endpoints
+
 # -----------------------------
 
 
@@ -249,6 +255,30 @@ async def preflight_handler(path: str):
 @app.get("/")
 async def root():
     return {"message": "Backend running with CORS enabled"}
+
+@app.get("/api/usage", response_model=list[UsageResponse])
+def get_openai_usage(days: int = 30):
+    """
+    Retrieve OpenAI API usage for the past `days` days.
+    """
+    start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    end_date = datetime.utcnow().strftime("%Y-%m-%d")
+
+    usage_data = openai_client.usage.list(
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    response = [
+        UsageResponse(
+            date=item["date"],
+            amount_usd=item["amount"] / 100,  # convert cents to dollars
+            type=item["type"]
+        )
+        for item in usage_data.data
+    ]
+
+    return response
 
 @app.post("/send-otp")
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
