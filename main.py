@@ -856,17 +856,30 @@ def append_to_user_context(user_id, role, content, pdf_meta=None):
 
 vectorstores_initialized = False
 
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
+import os
+from some_embedding_lib import OpenAIEmbeddings
+from some_vectorstore_lib import FAISS, load_vectorstore_from_gcs
+from some_utils import list_pdfs, ensure_vectorstores_for_all_pdfs, classify_query_type, get_context_gist, append_to_user_context
+
+app = FastAPI()
+
+TOP_K = 5
+vectorstores_initialized = False
+user_contexts = {}
+DEMO_FOLDER_ID = "your_demo_folder_id_here"
+
 @app.get("/search")
 async def search_pdfs(
     query: str = Query(..., min_length=1),
     reasoning: str = Query("simple", regex="^(simple|medium|advanced)$"),
     user_id: str = Query(...),
-    class_name: str = Query(None)  # New optional query parameter
+    class_name: str = Query(None)  # optional, for folder filtering
 ):
     print(f"\n==================== SEARCH REQUEST START ====================")
-    print(f"user_id: {user_id}")
-    print(f"Received query: {query}")
-    print(f"Reasoning mode: {reasoning}")
+    print(f"user_id: {user_id}, query: {query}, reasoning: {reasoning}")
+
     global vectorstores_initialized
     if user_id not in user_contexts:
         user_contexts[user_id] = []
@@ -874,100 +887,55 @@ async def search_pdfs(
     results = []
     top_chunks = []
 
-    # -------------------- Step 0: Get gist --------------------
+    # -------------------- Step 0: Context gist --------------------
     context_gist = get_context_gist(user_id)
     is_first_query = len(user_contexts[user_id]) == 0
     query_type = classify_query_type(query, context_gist)
-    print(f"[DEBUG] Query classified as: {query_type}")
-    
-    # Force first query to not be context_only
     if is_first_query:
-        query_type = "pdf_only"  # ensures GPT uses PDFs and prepends [PDF-based answer]
-    
+        query_type = "pdf_only"  # force first query to use PDFs
+
     use_context_only = query_type == "context_only"
-    # -------------------- Step 1: If PDF needed, retrieve --------------------
-    # -------------------- Step 1: If PDF needed, retrieve --------------------
-    print(f"[DEBUG] Entering PDF retrieval step. query_type={query_type}, class_name={class_name}")
+
+    # -------------------- Step 1: PDF retrieval --------------------
     pdf_files = []
     if query_type in ("pdf_only", "mixed") and class_name:
-        print("[DEBUG] Listing all PDFs from Drive...")
-        all_pdf_files = list_pdfs(DEMO_FOLDER_ID)
-        print(f"[DEBUG] Total PDFs found in Drive: {len(all_pdf_files)}")
-    
-        # 🔹 Filter PDFs by the user's class folder
-        pdf_files = [
-            pdf for pdf in all_pdf_files
-            if pdf.get("path", "").lower().startswith(class_name.lower())
-        ]
-    
-        # 🔹 Debug: show filtered PDFs for this class
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        # Filter PDFs by class folder
+        pdf_files = [pdf for pdf in all_pdfs if pdf.get("path", "").lower().startswith(class_name.lower())]
         print(f"[DEBUG] PDFs matching class '{class_name}': {len(pdf_files)}")
         for pdf in pdf_files:
             print(f"[DEBUG]   Name: {pdf['name']}, Path: {pdf['path']}, ID: {pdf['id']}")
-    
-        if not vectorstores_initialized:
-            print("[DEBUG] Ensuring vectorstores exist for the filtered PDFs...")
+
+        if pdf_files and not vectorstores_initialized:
             ensure_vectorstores_for_all_pdfs(pdf_files)
             vectorstores_initialized = True
-            print("[DEBUG] Vectorstores initialization complete.")
-    
-        # If no PDFs found for class, fallback to GPT knowledge
+
+        # If no PDFs found for class, fallback to GPT
         if not pdf_files:
-            print(f"[WARNING] No PDFs found for class '{class_name}'. Falling back to GPT knowledge only.")
+            print(f"[WARNING] No PDFs found for class '{class_name}'. Falling back to GPT only.")
             use_context_only = True
-    else:
-        print(f"[DEBUG] Skipping PDF retrieval: query_type={query_type}, class_name={class_name}")
-    
 
-        # Expand query for retrieval
-        rewritten_query_prompt = (
-            f"Rephrase the following question to make it more specific for finding relevant sections in educational PDFs, "
-            f"but keep all original key words intact: {query}"
-        )
-        response = openai_client.chat.completions.create(
-            model=REWRITER_MODEL,
-            messages=[{"role": "user", "content": rewritten_query_prompt}],
-            temperature=0.2
-        )
-        rewritten_query = response.choices[0].message.content
-
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-large",
-            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
-        )
-
+    # -------------------- Step 2: Build GPT prompt --------------------
+    context_texts_str = ""
+    if pdf_files:
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-large", openai_api_key=os.environ.get("OPENAI_API_KEY_S"))
+        rewritten_query = query  # optionally use query rewriter as before
         for pdf in pdf_files:
             pdf_name = pdf["name"]
             pdf_base_name = pdf_name.rsplit(".", 1)[0]
-            # Build the GCS prefix using full folder path
-            gcs_prefix = os.path.join(os.path.dirname(pdf_file["path"]), "vectorstore") + "/"
-            
-            # 🔹 Debug print to confirm the path
-            print(f"[DEBUG] Loading vector store from GCS with prefix: '{gcs_prefix}'")
-            print(f"[DEBUG] Full PDF path from Drive: '{pdf_file['path']}'")
+            gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), "vectorstore") + "/"
             vectorstore: FAISS = load_vectorstore_from_gcs(gcs_prefix, embeddings)
             if hasattr(vectorstore, "index") and hasattr(vectorstore.index, "normalize_L2"):
                 vectorstore.index.normalize_L2()
             docs_with_scores = vectorstore.similarity_search_with_score(rewritten_query, k=TOP_K)
-            for doc, distance_score in docs_with_scores:
-                # Keep all original metadata
+            for doc, score in docs_with_scores:
                 doc.metadata["pdf_name"] = pdf_name
                 doc.metadata["pdf_base_name"] = pdf_base_name
-            
-                # Do NOT reassign or rebuild the entire dict — just enrich it
-                top_chunks.append((doc, distance_score))
-
-        # Sort and keep top K
+                top_chunks.append((doc, score))
         top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
+        context_texts = [f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number','N/A')}\n{doc.page_content}" for doc, _ in top_chunks]
+        context_texts_str = "\n".join(context_texts)
 
-    # -------------------- Step 2: Prepare context text --------------------
-    context_texts = [
-        f"PDF: {doc.metadata['pdf_name']}, Page: {doc.metadata.get('page_number', 'N/A')}\n{doc.page_content}"
-        for doc, _ in top_chunks
-    ]
-    context_texts_str = "\n".join(context_texts)
-
-    # -------------------- Step 3: Reasoning instructions --------------------
     reasoning_instructions = {
         "simple": "Answer concisely and clearly in simple language.",
         "medium": "Answer in a balanced way with moderate detail.",
@@ -975,57 +943,45 @@ async def search_pdfs(
     }
     reasoning_instruction = reasoning_instructions.get(reasoning, reasoning_instructions["simple"])
 
-    # -------------------- Step 4: Build GPT Prompt --------------------
-    if use_context_only:
+    if use_context_only or not top_chunks:
         gpt_prompt = f"""
-        Use only the following previous conversation context to answer:
+        Use only the previous conversation context to answer:
         {context_gist}
-        
-        Question: {query}
-        
-        Answer concisely and clearly. Do not invent facts.
-        Prepend "[PDF-based answer]" if the answer is fully based on PDFs, else "[GPT answer]" if the answer relies on your own knowledge.
-        """
 
+        Question: {query}
+
+        Answer concisely. Prepend "[GPT answer]" if relying on own knowledge.
+        """
     else:
         gpt_prompt = f"""
-        You are an assistant. Answer the user question using the following:
-        
+        You are an assistant. Use the following to answer:
         Previous conversation context:
         {context_gist}
-        
+
         PDF Chunks:
         {context_texts_str}
-        
+
         Question: {query}
-        
+
         Instructions:
-        1. ONLY use PDF chunks if the answer is based on them.
-        2. Do NOT invent facts from the PDFs.
-        3. Prepend your answer with exactly one of these tags:
-           - "[PDF-based answer]" → if the answer is based entirely or mostly on the PDF chunks.
-           - "[GPT answer]" → if the answer relies on your own knowledge because PDFs do not provide enough information.
-        4. Make sure the tag appears as the very first text of your answer.
-        5. Follow this instruction for style: {reasoning_instruction}
+        1. Only use PDF chunks if available.
+        2. Do not invent facts.
+        3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
+        4. Style: {reasoning_instruction}
         """
 
+    print("[DEBUG] GPT PROMPT PREVIEW:", gpt_prompt[:1000])
 
-    print("==================== DEBUG: GPT PROMPT ====================")
-    print(gpt_prompt[:1000])
-    print("==================== END GPT PROMPT ====================")
-
-    # -------------------- Step 5: Call GPT --------------------
+    # -------------------- Step 3: Call GPT --------------------
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
         temperature=0.2
     )
     answer_text = answer_response.choices[0].message.content.strip()
-    print("==================== DEBUG: GPT RAW RESPONSE ====================")
-    print(answer_text[:1000])
-    print("==================== END GPT RAW RESPONSE ====================")
+    print("[DEBUG] GPT RAW RESPONSE:", answer_text[:500])
 
-    # -------------------- Step 6: Determine source --------------------
+    # -------------------- Step 4: Determine source --------------------
     if answer_text.startswith("[PDF-based answer]"):
         source_name = "Academy Answer"
         answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
@@ -1035,66 +991,31 @@ async def search_pdfs(
     else:
         source_name = "GPT Answer"
 
-    # -------------------- Step 6b: Prepend GPT message if no PDFs --------------------
+    # -------------------- Step 5: Prepend GPT message if needed --------------------
     if source_name == "GPT Answer":
-        # Always prepend the message if top_chunks is empty OR GPT answer
-        answer_text = (
-            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
-            + answer_text
-        )
+        answer_text = "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. " + answer_text
 
-    # -------------------- Step 7: Collect PDF links --------------------
-        # -------------------- Step 7: Collect PDF links --------------------
-    
-    print("\n[DEBUG] ---- Collecting PDF URLs ----")
-    print(f"[DEBUG] Number of top_chunks: {len(top_chunks)}")
-        # -------------------- Collect PDF links (same as /search) --------------------
+    # -------------------- Step 6: Collect PDF links --------------------
     used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
-    print(f"[DEBUG] ✅ PDF links collected (same style as /search): {used_pdfs}")    
-       
 
-    # -------------------- Step 8: Prepend PDF metadata if Academy Answer --------------------
+    # -------------------- Step 7: Append PDF metadata if Academy Answer --------------------
     if source_name == "Academy Answer" and top_chunks:
-        top_doc, _ = top_chunks[0]  # take the most relevant chunk
+        top_doc, _ = top_chunks[0]
         pdf_metadata = f"[PDF used: {top_doc.metadata['pdf_name']} (Page {top_doc.metadata.get('page_number','N/A')})]"
-        # Append PDF info after answer text
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
-    if source_name == "GPT Answer":
-        answer_text = (
-            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
-            + answer_text
-        )
-    # -------------------- Step 9: Append to results --------------------
-    if not source_name:
-        source_name = "GPT Answer"
-        answer_text = (
-            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
-            + answer_text
-        )
+    # -------------------- Step 8: Append to results --------------------
     results.append({
         "name": f"**{source_name}**",
         "snippet": answer_text,
         "links": used_pdfs if source_name == "Academy Answer" else []
     })
-    print(f"[DEBUG] Appending result for source_name: {source_name}")
-    print(f"[DEBUG]   name   : **{source_name}**")
-    print(f"[DEBUG]   snippet: {answer_text[:100]}{'...' if len(answer_text) > 100 else ''}")  # first 100 chars
-    if source_name == "Academy Answer":
-        print(f"[DEBUG]   links  : {used_pdfs}")  # show full list of PDFs
-    else:
-        print(f"[DEBUG]   links  : []")
-    print("[DEBUG] -------------------------------")
 
     # -------------------- Step 9: Update user context --------------------
     append_to_user_context(user_id, "user", query)
     append_to_user_context(user_id, "assistant", answer_text)
 
-    print("==================== DEBUG: USER CONTEXT ====================")
-    for i, msg in enumerate(user_contexts[user_id]):
-        print(f"{i} - role: {msg['role']}, content: {msg['content'][:200]}")
     print("==================== SEARCH REQUEST END ====================\n")
-
     return JSONResponse(results)
 
 
