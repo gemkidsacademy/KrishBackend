@@ -262,25 +262,30 @@ def get_openai_usage(days: int = 30):
     """
     Retrieve OpenAI API usage for the past `days` days.
     """
-    start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     end_date = datetime.utcnow().strftime("%Y-%m-%d")
+    start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    usage_data = openai_client.usage.list(
-        start_date=start_date,
-        end_date=end_date
-    )
+    url = f"https://api.openai.com/v1/dashboard/billing/usage?start_date={start_date}&end_date={end_date}"
 
-    response = [
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        return [{"date": "error", "amount_usd": 0.0, "type": f"Failed: {response.text}"}]
+
+    data = response.json()
+    daily_costs = data.get("daily_costs", [])
+
+    formatted = [
         UsageResponse(
-            date=item["date"],
-            amount_usd=item["amount"] / 100,  # convert cents to dollars
-            type=item["type"]
+            date=item["timestamp"].split("T")[0],
+            amount_usd=item["line_items"][0]["cost"] / 100.0 if item["line_items"] else 0.0,
         )
-        for item in usage_data.data
+        for item in daily_costs
     ]
 
-    return response
-
+    return formatted
 @app.post("/send-otp")
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
