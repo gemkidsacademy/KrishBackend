@@ -682,28 +682,36 @@ def ensure_vectorstores_for_all_pdfs(pdf_files):
     """
     for pdf in pdf_files:
         pdf_id = pdf.get("id")
+        pdf_name = pdf.get("name", "Unknown")
         pdf_path = pdf.get("path")  # Full folder path from Drive
 
         if not pdf_id:
-            print(f"[DEBUG] PDF {pdf.get('name', 'Unknown')} has no Drive ID. Skipping.")
+            print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
             continue
 
         # Skip if already processed in this session
         if pdf_id in processed_pdfs:
-            print(f"[DEBUG] PDF {pdf.get('name')} already processed in this session. Skipping.")
+            print(f"[DEBUG] PDF {pdf_name} already processed in this session. Skipping.")
             continue
 
         # Skip if PDF already exists in GCS
         if gcs_bucket.blob(pdf_path).exists():
-            print(f"[DEBUG] PDF {pdf.get('name')} already exists in GCS. Skipping.")
+            print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping.")
             processed_pdfs.add(pdf_id)
             continue
+
+        # Print before creating vector store
+        print(f"[DEBUG] Creating vector store for PDF: {pdf_name}, Path: {pdf_path}")
 
         # Create vector store for this PDF
         create_vectorstore_for_pdf(pdf)
 
+        # Print after successful creation
+        print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
+
         # Mark as processed in memory
         processed_pdfs.add(pdf_id)
+
         
 def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
