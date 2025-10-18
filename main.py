@@ -45,7 +45,8 @@ from google.cloud import storage
 from PyPDF2 import PdfReader
 from openai import OpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
+
 from langchain.vectorstores import FAISS
 
 # Rapidfuzz for string matching
@@ -605,11 +606,19 @@ def upload_vectorstore_to_drive(vectorstore_bytes, vs_name, folder_id):
 
 # Keep track of PDFs processed in this run
 processed_pdfs = set()
+from langchain_openai import OpenAIEmbeddings  # updated import
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores import FAISS
+from PyPDF2 import PdfReader
+import io, os, tempfile
+
 def create_vectorstore_for_pdf(pdf_file):
-    pdf_name = pdf_file.get("name")
+    pdf_name = pdf_file.get("name", "Unknown")
     pdf_id = pdf_file.get("id")
-    pdf_path = pdf_file.get("path")  # <-- full folder path from Drive
+    pdf_path = pdf_file.get("path", pdf_name)
     pdf_link = pdf_file.get("webViewLink", "")
+
+    print(f"[DEBUG] Starting vector store creation for PDF: {pdf_name}")
 
     if pdf_id is None:
         print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
@@ -620,52 +629,77 @@ def create_vectorstore_for_pdf(pdf_file):
         print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping upload.")
         return
 
-    # Download PDF
-    file_bytes = download_pdf(pdf_id)
-    reader = PdfReader(io.BytesIO(file_bytes))
+    try:
+        # Download PDF
+        print(f"[DEBUG] Downloading PDF: {pdf_name}")
+        file_bytes = download_pdf(pdf_id)
+        reader = PdfReader(io.BytesIO(file_bytes))
+    except Exception as e:
+        print(f"[ERROR] Failed to download or read PDF {pdf_name}: {e}")
+        return
 
-    # Create chunks with metadata (same as before)
+    # Split PDF into chunks
     chunks = []
     for i, page in enumerate(reader.pages, start=1):
-        page_text = page.extract_text()
-        if page_text and page_text.strip():
-            cleaned_text = " ".join(line.strip() for line in page_text.splitlines() if line.strip())
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=800,
-                chunk_overlap=250,
-                separators=["\n\n", "\n", " "]
-            )
-            page_chunks = text_splitter.create_documents([cleaned_text])
-            for j, chunk in enumerate(page_chunks, start=1):
-                chunk.metadata.update({
-                    "pdf_name": pdf_name,
-                    "page_number": i,
-                    "chunk_index": j,
-                    "pdf_link": pdf_link
-                })
-                chunks.append(chunk)
+        try:
+            page_text = page.extract_text()
+            if page_text and page_text.strip():
+                cleaned_text = " ".join(line.strip() for line in page_text.splitlines() if line.strip())
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=800,
+                    chunk_overlap=250,
+                    separators=["\n\n", "\n", " "]
+                )
+                page_chunks = text_splitter.create_documents([cleaned_text])
+                for j, chunk in enumerate(page_chunks, start=1):
+                    chunk.metadata.update({
+                        "pdf_name": pdf_name,
+                        "page_number": i,
+                        "chunk_index": j,
+                        "pdf_link": pdf_link
+                    })
+                    chunks.append(chunk)
+        except Exception as e:
+            print(f"[ERROR] Failed to process page {i} of PDF {pdf_name}: {e}")
 
     if not chunks:
         print(f"[DEBUG] No text found in PDF {pdf_name}, skipping vector store creation.")
         return
 
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-large", openai_api_key=os.environ.get("OPENAI_API_KEY_S"))
-    vs = FAISS.from_documents(chunks, embeddings)
-    vs.index.normalize_L2()  # optional: normalize embeddings
+    # Create embeddings and vector store
+    try:
+        print(f"[DEBUG] Creating embeddings for PDF: {pdf_name}")
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-large",
+            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+        )
+        vs = FAISS.from_documents(chunks, embeddings)
+        vs.index.normalize_L2()  # optional
+        print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
+    except Exception as e:
+        print(f"[ERROR] Failed to create embeddings/vector store for PDF {pdf_name}: {e}")
+        return
 
     # Save vector store to GCS using same folder structure
-    gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore/"
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        vs.save_local(tmp_dir)
-        for filename in os.listdir(tmp_dir):
-            path = os.path.join(tmp_dir, filename)
-            blob_name = f"{gcs_prefix_vs}{filename}"
-            upload_to_gcs(open(path, "rb").read(), blob_name)
-            print(f"[DEBUG] Uploaded vector store file to GCS: {blob_name}")
+    try:
+        gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore/"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            vs.save_local(tmp_dir)
+            for filename in os.listdir(tmp_dir):
+                path = os.path.join(tmp_dir, filename)
+                blob_name = f"{gcs_prefix_vs}{filename}"
+                upload_to_gcs(open(path, "rb").read(), blob_name)
+                print(f"[DEBUG] Uploaded vector store file to GCS: {blob_name}")
+    except Exception as e:
+        print(f"[ERROR] Failed to upload vector store for PDF {pdf_name} to GCS: {e}")
+        return
 
     # Upload original PDF
-    upload_to_gcs(file_bytes, pdf_path)
-    print(f"[INFO] Uploaded PDF and vector store for {pdf_name} to GCS.")
+    try:
+        upload_to_gcs(file_bytes, pdf_path)
+        print(f"[INFO] Uploaded PDF and vector store for {pdf_name} to GCS.")
+    except Exception as e:
+        print(f"[ERROR] Failed to upload PDF {pdf_name} to GCS: {e}")
 
 
 
