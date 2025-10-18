@@ -608,24 +608,40 @@ def upload_vectorstore_to_drive(vectorstore_bytes, vs_name, folder_id):
 processed_pdfs = set()
 
 def create_vectorstore_for_pdf(pdf_file):
+    """
+    Process a single PDF from Google Drive and create a separate vector store for it in Google Cloud Storage (GCS).
+
+    This function ensures:
+    1. Each PDF gets its own vector store, preserving Google Drive folder structure in GCS.
+    2. PDFs already uploaded and processed are skipped to save time.
+    3. Embeddings are created using OpenAI's 'text-embedding-3-large' model.
+    4. Vector store files are uploaded recursively to GCS.
+    5. Original PDF is also uploaded to GCS.
+    
+    Note:
+    - This does NOT merge PDFs in a folder; each PDF is handled individually.
+    - If a new PDF is added to an existing folder, it will be processed and a new vector store created.
+    """
+
     pdf_name = pdf_file.get("name", "Unknown")
     pdf_id = pdf_file.get("id")
-    pdf_path = pdf_file.get("path", pdf_name)
+    pdf_path = pdf_file.get("path", pdf_name)  # preserve folder structure
     pdf_link = pdf_file.get("webViewLink", "")
 
     print(f"[DEBUG] Starting vector store creation for PDF: {pdf_name}")
 
+    # Skip PDFs with no Google Drive ID
     if pdf_id is None:
         print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
         return
 
-    # Check if PDF already exists in GCS
+    # Skip PDFs that already exist in GCS
     if gcs_bucket.blob(pdf_path).exists():
         print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping upload.")
         return
 
+    # Step 1: Download PDF from Drive
     try:
-        # Download PDF
         print(f"[DEBUG] Downloading PDF: {pdf_name}")
         file_bytes = download_pdf(pdf_id)
         reader = PdfReader(io.BytesIO(file_bytes))
@@ -633,7 +649,7 @@ def create_vectorstore_for_pdf(pdf_file):
         print(f"[ERROR] Failed to download or read PDF {pdf_name}: {e}")
         return
 
-    # Split PDF into chunks
+    # Step 2: Split PDF into text chunks
     chunks = []
     for i, page in enumerate(reader.pages, start=1):
         try:
@@ -646,6 +662,8 @@ def create_vectorstore_for_pdf(pdf_file):
                     separators=["\n\n", "\n", " "]
                 )
                 page_chunks = text_splitter.create_documents([cleaned_text])
+
+                # Add metadata to each chunk
                 for j, chunk in enumerate(page_chunks, start=1):
                     chunk.metadata.update({
                         "pdf_name": pdf_name,
@@ -661,7 +679,7 @@ def create_vectorstore_for_pdf(pdf_file):
         print(f"[DEBUG] No text found in PDF {pdf_name}, skipping vector store creation.")
         return
 
-    # Create embeddings and vector store
+    # Step 3: Create embeddings and FAISS vector store
     try:
         print(f"[DEBUG] Creating embeddings for PDF: {pdf_name}")
         embeddings = OpenAIEmbeddings(
@@ -669,19 +687,20 @@ def create_vectorstore_for_pdf(pdf_file):
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
         vs = FAISS.from_documents(chunks, embeddings)
+        if hasattr(vs.index, "normalize_L2"):
+            vs.index.normalize_L2()  # optional: make cosine similarity scores accurate
         print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
     except Exception as e:
         print(f"[ERROR] Failed to create embeddings/vector store for PDF {pdf_name}: {e}")
         return
 
-    # Save vector store to GCS using same folder structure
+    # Step 4: Save vector store recursively to GCS
     try:
         gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore/"
         with tempfile.TemporaryDirectory() as tmp_dir:
             vs.save_local(tmp_dir)
-            print(f"[DEBUG] Vector store saved locally at {tmp_dir}")
 
-            # Recursively upload all files
+            # Recursively upload all vector store files
             for root, dirs, files in os.walk(tmp_dir):
                 for filename in files:
                     path = os.path.join(root, filename)
@@ -694,10 +713,10 @@ def create_vectorstore_for_pdf(pdf_file):
         print(f"[ERROR] Failed to upload vector store for PDF {pdf_name} to GCS: {e}")
         return
 
-    # Upload original PDF
+    # Step 5: Upload original PDF
     try:
         upload_to_gcs(file_bytes, pdf_path)
-        print(f"[INFO] Uploaded PDF and vector store for {pdf_name} to GCS successfully.")
+        print(f"[INFO] Uploaded PDF and vector store for {pdf_name} to GCS.")
     except Exception as e:
         print(f"[ERROR] Failed to upload PDF {pdf_name} to GCS: {e}")
 
