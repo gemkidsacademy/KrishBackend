@@ -1035,6 +1035,14 @@ async def search_pdfs(
     else:
         source_name = "GPT Answer"
 
+    # -------------------- Step 6b: Prepend GPT message if no PDFs --------------------
+    if source_name == "GPT Answer":
+        # Always prepend the message if top_chunks is empty OR GPT answer
+        answer_text = (
+            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base to answer your query. "
+            + answer_text
+        )
+
     # -------------------- Step 7: Collect PDF links --------------------
         # -------------------- Step 7: Collect PDF links --------------------
     
