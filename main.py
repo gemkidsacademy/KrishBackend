@@ -606,11 +606,6 @@ def upload_vectorstore_to_drive(vectorstore_bytes, vs_name, folder_id):
 
 # Keep track of PDFs processed in this run
 processed_pdfs = set()
-from langchain_openai import OpenAIEmbeddings  # updated import
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from PyPDF2 import PdfReader
-import io, os, tempfile
 
 def create_vectorstore_for_pdf(pdf_file):
     pdf_name = pdf_file.get("name", "Unknown")
@@ -674,7 +669,6 @@ def create_vectorstore_for_pdf(pdf_file):
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
         vs = FAISS.from_documents(chunks, embeddings)
-        vs.index.normalize_L2()  # optional
         print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
     except Exception as e:
         print(f"[ERROR] Failed to create embeddings/vector store for PDF {pdf_name}: {e}")
@@ -685,11 +679,12 @@ def create_vectorstore_for_pdf(pdf_file):
         gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore/"
         with tempfile.TemporaryDirectory() as tmp_dir:
             vs.save_local(tmp_dir)
+            print(f"[DEBUG] Vector store saved locally at {tmp_dir}")
+
             # Recursively upload all files
             for root, dirs, files in os.walk(tmp_dir):
                 for filename in files:
                     path = os.path.join(root, filename)
-                    # Preserve folder structure relative to tmp_dir
                     relative_path = os.path.relpath(path, tmp_dir)
                     blob_name = f"{gcs_prefix_vs}{relative_path.replace(os.sep, '/')}"
                     upload_to_gcs(open(path, "rb").read(), blob_name)
@@ -702,7 +697,7 @@ def create_vectorstore_for_pdf(pdf_file):
     # Upload original PDF
     try:
         upload_to_gcs(file_bytes, pdf_path)
-        print(f"[INFO] Uploaded PDF and vector store for {pdf_name} to GCS.")
+        print(f"[INFO] Uploaded PDF and vector store for {pdf_name} to GCS successfully.")
     except Exception as e:
         print(f"[ERROR] Failed to upload PDF {pdf_name} to GCS: {e}")
 
