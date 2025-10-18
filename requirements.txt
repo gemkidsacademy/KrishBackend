@@ -13,6 +13,7 @@ aiohttp==3.13.0
     #   twilio
 aiohttp-retry==2.9.1
     # via twilio
+faiss-cpu==1.7.4
 aiosignal==1.4.0
     # via aiohttp
 annotated-types==0.7.0
