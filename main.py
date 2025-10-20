@@ -140,6 +140,17 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+class UserListItem(BaseModel):
+    id: int
+    name: str
+    email: str
+    phone_number: str
+    class_name: str
+
+    class Config:
+        orm_mode = True  # allows SQLAlchemy models to be converted to Pydantic models
+        
+
 class UserResponse(BaseModel):
     name: str
     email: str
@@ -277,6 +288,12 @@ async def preflight_handler(path: str):
 @app.get("/")
 async def root():
     return {"message": "Backend running with CORS enabled"}
+
+# GET all users
+@app.get("/api/users", response_model=List[UserListItem])
+def get_all_users(db: Session = Depends(get_db)):
+    users = db.query(User).all()
+    return users
 
 # ----------------- GET endpoint -----------------
 # GET user by ID
