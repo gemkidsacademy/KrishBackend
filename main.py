@@ -578,7 +578,7 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
 @app.put("/edit-user/{user_id}")
 def edit_user(
     user_id: int = Path(..., description="ID of the user to update"),
-    user_request: EditUserRequest = Depends(),
+    user_request: EditUserRequest = Body(...),
     db: Session = Depends(get_db)
 ):
     # Fetch the user
