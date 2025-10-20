@@ -52,8 +52,11 @@ from langchain.vectorstores import FAISS
 
 # Rapidfuzz for string matching
 from rapidfuzz import fuzz
+
 #global dictionary gpt maintains context in the conversation
 user_contexts: dict[str, list[dict[str, str]]] = {}
+#for creating user passwords
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 
@@ -147,6 +150,14 @@ class SendOTPRequest(BaseModel):
 class VerifyOTPRequest(BaseModel):
     phone_number: str
     otp: str
+
+class AddUserRequest(BaseModel):
+    name: str
+    email: EmailStr
+    phone_number: str
+    class_name: str 
+    password: str
+
 
 class User(Base):
     __tablename__ = "users"
@@ -256,6 +267,42 @@ async def preflight_handler(path: str):
 @app.get("/")
 async def root():
     return {"message": "Backend running with CORS enabled"}
+
+@app.post("/api/add-user")
+def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Hash the password
+    hashed_password = pwd_context.hash(data.password)
+
+    # Create new user object
+    new_user = User(
+        name=data.name,
+        email=data.email,
+        phone_number=data.phone_number,
+        class_name=data.class_name,
+        password=hashed_password
+    )
+
+    # Save to DB
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "message": "User added successfully",
+        "user": {
+            "id": new_user.id,
+            "name": new_user.name,
+            "email": new_user.email,
+            "phone_number": new_user.phone_number,
+            "class_name": new_user.class_name,
+            "created_at": new_user.created_at
+        }
+    }
 
 @app.get("/api/usage", response_model=list[UsageResponse])
 def get_openai_usage(days: int = 30):
@@ -900,6 +947,7 @@ def append_to_user_context(user_id, role, content, pdf_meta=None):
     if pdf_meta:
         entry["content"] += "\n" + "\n".join(pdf_meta)
     user_contexts[user_id].append(entry)
+
 
 
 vectorstores_initialized = False
