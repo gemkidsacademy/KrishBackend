@@ -358,6 +358,7 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
         "id": user.id,
         "name": user.name,
         "phone_number": user.phone_number,
+        "class_name": user.class_name,  # <-- include class name here
         # optionally add session_token or other fields if needed
     }
 
