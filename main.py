@@ -1,7 +1,8 @@
 import random
 import time
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, List
+
 
 
 #Twilio API
