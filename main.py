@@ -153,11 +153,11 @@ class VerifyOTPRequest(BaseModel):
 
 class AddUserRequest(BaseModel):
     name: str
-    email: str
+    email: str  # just string, frontend will validate
     phone_number: str
-    class_name: str 
+    class_name: str
     password: str
-
+    
 
 class User(Base):
     __tablename__ = "users"
@@ -270,11 +270,6 @@ async def root():
 
 @app.post("/api/add-user")
 def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
-    # Check if email already exists
-    existing_user = db.query(User).filter(User.email == data.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
     # Hash the password
     hashed_password = pwd_context.hash(data.password)
 
