@@ -143,9 +143,9 @@ Base = declarative_base()
 class UserResponse(BaseModel):
     name: str
     email: str
-    phone_number: Optional[str] = None
-    class_name: Optional[str] = None
-
+    phone_number: str  # now required
+    class_name: str    # now required
+    
 class UsageResponse(BaseModel):
     date: str
     amount_usd: float
@@ -279,11 +279,12 @@ async def root():
     return {"message": "Backend running with CORS enabled"}
 
 # ----------------- GET endpoint -----------------
-@app.get("/get-user/{user_id}", response_model=UserResponse)
+# GET user by ID
+@app.get("/users/info/{user_id}", response_model=UserResponse)
 def get_user(user_id: int = Path(..., description="ID of the user to retrieve"),
              db: Session = Depends(get_db)):
     """
-    Retrieve a user's information by ID for editing (excluding ID and password).
+    Retrieve a user's information by ID for editing (excluding password and ID).
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -295,7 +296,6 @@ def get_user(user_id: int = Path(..., description="ID of the user to retrieve"),
         phone_number=user.phone_number,
         class_name=user.class_name
     )
-
 @app.get("/user_ids")
 def get_user_ids(db: Session = Depends(get_db)):
     """
