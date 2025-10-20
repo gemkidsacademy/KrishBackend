@@ -140,6 +140,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+class UserResponse(BaseModel):
+    name: str
+    email: str
+    phone_number: Optional[str] = None
+    class_name: Optional[str] = None
+
 class UsageResponse(BaseModel):
     date: str
     amount_usd: float
@@ -271,6 +277,24 @@ async def preflight_handler(path: str):
 @app.get("/")
 async def root():
     return {"message": "Backend running with CORS enabled"}
+
+# ----------------- GET endpoint -----------------
+@app.get("/get-user/{user_id}", response_model=UserResponse)
+def get_user(user_id: int = Path(..., description="ID of the user to retrieve"),
+             db: Session = Depends(get_db)):
+    """
+    Retrieve a user's information by ID for editing (excluding ID and password).
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return UserResponse(
+        name=user.name,
+        email=user.email,
+        phone_number=user.phone_number,
+        class_name=user.class_name
+    )
 
 @app.get("/user_ids")
 def get_user_ids(db: Session = Depends(get_db)):
