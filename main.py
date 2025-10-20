@@ -265,6 +265,16 @@ async def preflight_handler(path: str):
 async def root():
     return {"message": "Backend running with CORS enabled"}
 
+@app.get("/user_ids")
+def get_user_ids(db: Session = Depends(get_db)):
+    """
+    Returns all user IDs as a list of objects:
+    [{ "id": 1 }, { "id": 2 }, ...]
+    """
+    users = db.query(User.id).all()  # returns list of tuples like [(1,), (2,), ...]
+    user_ids = [{"id": u[0]} for u in users]  # convert to list of dicts
+    return user_ids
+
 @app.get("/api/usage", response_model=list[UsageResponse])
 def get_openai_usage(days: int = 30):
     """
@@ -303,6 +313,7 @@ def get_openai_usage(days: int = 30):
 
     except Exception as e:
         return [{"date": "N/A", "amount_usd": 0, "type": f"Error: {str(e)}"}]
+        
         
 @app.post("/send-otp")
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
