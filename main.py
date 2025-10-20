@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from twilio.rest import Client
 # FastAPI & Pydantic
 from fastapi import FastAPI, Response, Depends, HTTPException, Query
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
@@ -153,7 +153,7 @@ class VerifyOTPRequest(BaseModel):
 
 class AddUserRequest(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     phone_number: str
     class_name: str 
     password: str
