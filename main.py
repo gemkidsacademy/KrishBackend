@@ -161,6 +161,12 @@ class AddUserRequest(BaseModel):
     phone_number: str
     class_name: str 
 
+class EditUserRequest(BaseModel):
+    name: str
+    email: str
+    phone_number: str
+    class_name: str
+    password: Optional[str] = None  # only update if provided
     
 
 class User(Base):
@@ -543,6 +549,40 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     db.refresh(new_user)
 
     return {"message": f"User '{new_user.name}' added successfully!"}
+
+@app.put("/edit-user/{user_id}")
+def edit_user(
+    user_id: int = Path(..., description="ID of the user to update"),
+    user_request: EditUserRequest = Depends(),
+    db: Session = Depends(get_db)
+):
+    # Fetch the user
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if email is being updated and is unique
+    if user.email != user_request.email:
+        existing_user = db.query(User).filter(User.email == user_request.email).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Update fields
+    user.name = user_request.name
+    user.email = user_request.email
+    user.phone_number = user_request.phone_number
+    user.class_name = user_request.class_name
+
+    # Only update password if provided
+    if user_request.password:
+        user.password = generate_password_hash(user_request.password)
+
+    user.updated_at = datetime.utcnow()  # optional: track updates
+
+    db.commit()
+    db.refresh(user)
+
+    return {"message": f"User '{user.name}' updated successfully!"}
 
         
 
