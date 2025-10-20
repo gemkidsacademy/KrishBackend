@@ -270,6 +270,19 @@ async def root():
 
 @app.post("/api/add-user")
 def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
+    # --- Debug: print the incoming data ---
+    print("[DEBUG] Received add-user request with data:")
+    print(f"  name: {data.name}")
+    print(f"  email: {data.email}")
+    print(f"  phone_number: {data.phone_number}")
+    print(f"  class_name: {data.class_name}")
+    print(f"  password: {data.password}")
+
+    # Check if email already exists (optional)
+    # existing_user = db.query(User).filter(User.email == data.email).first()
+    # if existing_user:
+    #     raise HTTPException(status_code=400, detail="Email already registered")
+
     # Hash the password
     hashed_password = pwd_context.hash(data.password)
 
@@ -279,13 +292,16 @@ def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
         email=data.email,
         phone_number=data.phone_number,
         class_name=data.class_name,
-        password=hashed_password
+        password=hashed_password,
     )
 
     # Save to DB
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # --- Debug: print user object after DB commit ---
+    print(f"[DEBUG] New user created: {new_user}")
 
     return {
         "message": "User added successfully",
@@ -295,10 +311,9 @@ def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
             "email": new_user.email,
             "phone_number": new_user.phone_number,
             "class_name": new_user.class_name,
-            "created_at": new_user.created_at
-        }
+            "created_at": new_user.created_at,
+        },
     }
-
 @app.get("/api/usage", response_model=list[UsageResponse])
 def get_openai_usage(days: int = 30):
     """
