@@ -151,12 +151,16 @@ class VerifyOTPRequest(BaseModel):
     phone_number: str
     otp: str
 
+
+    
 class AddUserRequest(BaseModel):
+    id: int
     name: str
-    email: str  # just string, frontend will validate
-    phone_number: str
-    class_name: str
+    email: str
     password: str
+    phone_number: str
+    class_name: str 
+
     
 
 class User(Base):
@@ -190,13 +194,6 @@ class LoginRequest(BaseModel):
     name: str
     password: str
 
-class AddUserRequest(BaseModel):
-    id: int
-    name: str
-    email: str
-    password: str
-    phone_number: str | None = None
-    class_name: str | None = None
 
 Base.metadata.create_all(bind=engine)
 
@@ -268,52 +265,6 @@ async def preflight_handler(path: str):
 async def root():
     return {"message": "Backend running with CORS enabled"}
 
-@app.post("/api/add-user")
-def add_user(data: AddUserRequest, db: Session = Depends(get_db)):
-    # --- Debug: print the incoming data ---
-    print("[DEBUG] Received add-user request with data:")
-    print(f"  name: {data.name}")
-    print(f"  email: {data.email}")
-    print(f"  phone_number: {data.phone_number}")
-    print(f"  class_name: {data.class_name}")
-    print(f"  password: {data.password}")
-
-    # Check if email already exists (optional)
-    # existing_user = db.query(User).filter(User.email == data.email).first()
-    # if existing_user:
-    #     raise HTTPException(status_code=400, detail="Email already registered")
-
-    # Hash the password
-    hashed_password = pwd_context.hash(data.password)
-
-    # Create new user object
-    new_user = User(
-        name=data.name,
-        email=data.email,
-        phone_number=data.phone_number,
-        class_name=data.class_name,
-        password=hashed_password,
-    )
-
-    # Save to DB
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-
-    # --- Debug: print user object after DB commit ---
-    print(f"[DEBUG] New user created: {new_user}")
-
-    return {
-        "message": "User added successfully",
-        "user": {
-            "id": new_user.id,
-            "name": new_user.name,
-            "email": new_user.email,
-            "phone_number": new_user.phone_number,
-            "class_name": new_user.class_name,
-            "created_at": new_user.created_at,
-        },
-    }
 @app.get("/api/usage", response_model=list[UsageResponse])
 def get_openai_usage(days: int = 30):
     """
