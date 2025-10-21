@@ -324,6 +324,24 @@ def get_user_ids(db: Session = Depends(get_db)):
     user_ids = [{"id": u[0]} for u in users]  # convert to list of dicts
     return user_ids
 
+@app.delete("/delete-user/{user_id}")
+def delete_user(
+    user_id: int = Path(..., description="ID of the user to delete"),
+    db: Session = Depends(get_db)
+):
+    # Fetch the user
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Delete the user
+    db.delete(user)
+    db.commit()
+
+    return {"message": f"User '{user.name}' deleted successfully!"}
+
+
+
 @app.get("/api/usage", response_model=list[UsageResponse])
 def get_openai_usage(days: int = 30):
     """
