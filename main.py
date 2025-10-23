@@ -932,7 +932,7 @@ def ensure_vectorstores_for_all_pdfs(pdf_files):
 
         # Mark as processed in memory
         processed_pdfs.add(pdf_id)
-
+ 
         
 def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
