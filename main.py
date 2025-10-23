@@ -1102,7 +1102,8 @@ async def search_pdfs(
                 # Check if vectorstore already exists in GCS for this specific PDF
                 if not vectorstore_exists_in_gcs(gcs_prefix):
                     print(f"[INFO] Vectorstore not found in GCS for '{pdf_name}', creating...")
-                    ensure_vectorstores_for_all_pdfs(pdf, embeddings, gcs_prefix)
+                    ensure_vectorstores_for_all_pdfs([pdf])
+
                 else:
                     print(f"[DEBUG] Vectorstore already exists in GCS for '{pdf_name}'")
 
