@@ -1154,11 +1154,14 @@ async def search_pdfs(
         gpt_prompt = f"""
         Use only the previous conversation context to answer:
         {context_gist}
-
+    
         Question: {query}
-
+    
+        Style: {reasoning_instruction}
+    
         Answer concisely. Prepend "[GPT answer]" if relying on own knowledge.
         """
+
     else:
         gpt_prompt = f"""
         You are an assistant. Use the following to answer:
