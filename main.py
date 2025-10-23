@@ -785,6 +785,10 @@ def create_vectorstore_for_pdf(pdf_file):
     3. Embeddings are created using OpenAI's 'text-embedding-3-large' model.
     4. Vector store files are uploaded recursively to GCS.
     5. Original PDF is also uploaded to GCS.
+    
+    Note:
+    - This does NOT merge PDFs in a folder; each PDF is handled individually.
+    - If a new PDF is added to an existing folder, it will be processed and a new vector store created.
     """
 
     pdf_name = pdf_file.get("name", "Unknown")
@@ -794,6 +798,7 @@ def create_vectorstore_for_pdf(pdf_file):
 
     print(f"[DEBUG] Starting vector store creation for PDF: {pdf_name}")
 
+    # Skip PDFs with no Google Drive ID
     if pdf_id is None:
         print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
         return
@@ -826,6 +831,7 @@ def create_vectorstore_for_pdf(pdf_file):
                 )
                 page_chunks = text_splitter.create_documents([cleaned_text])
 
+                # Add metadata to each chunk
                 for j, chunk in enumerate(page_chunks, start=1):
                     chunk.metadata.update({
                         "pdf_name": pdf_name,
@@ -850,28 +856,25 @@ def create_vectorstore_for_pdf(pdf_file):
         )
         vs = FAISS.from_documents(chunks, embeddings)
         if hasattr(vs.index, "normalize_L2"):
-            vs.index.normalize_L2()
+            vs.index.normalize_L2()  # optional: make cosine similarity scores accurate
         print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
     except Exception as e:
         print(f"[ERROR] Failed to create embeddings/vector store for PDF {pdf_name}: {e}")
         return
 
-    # Step 4: Save vector store recursively to GCS under correct folder hierarchy
+    # Step 4: Save vector store recursively to GCS
     try:
-        # Ensure vectorstore is stored under its folder in GCS
-        gcs_prefix_vs = os.path.join(os.path.dirname(pdf_path), "vectorstore", pdf_name)
-        if not gcs_prefix_vs.endswith("/"):
-            gcs_prefix_vs += "/"
-
+        gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore/"
         with tempfile.TemporaryDirectory() as tmp_dir:
             vs.save_local(tmp_dir)
 
+            # Recursively upload all vector store files
             for root, dirs, files in os.walk(tmp_dir):
                 for filename in files:
-                    local_path = os.path.join(root, filename)
-                    relative_path = os.path.relpath(local_path, tmp_dir)
-                    blob_name = os.path.join(gcs_prefix_vs, relative_path).replace("\\", "/")
-                    upload_to_gcs(open(local_path, "rb").read(), blob_name)
+                    path = os.path.join(root, filename)
+                    relative_path = os.path.relpath(path, tmp_dir)
+                    blob_name = f"{gcs_prefix_vs}{relative_path.replace(os.sep, '/')}"
+                    upload_to_gcs(open(path, "rb").read(), blob_name)
                     print(f"[DEBUG] Uploaded vector store file to GCS: {blob_name}")
 
     except Exception as e:
@@ -886,25 +889,6 @@ def create_vectorstore_for_pdf(pdf_file):
         print(f"[ERROR] Failed to upload PDF {pdf_name} to GCS: {e}")
 
 
-def vectorstore_exists_in_gcs(gcs_prefix: str) -> bool:
-    """
-    Checks if there are any files under the given GCS prefix using the existing gcs_bucket.
-    
-    Args:
-        gcs_prefix (str): The folder path in the bucket, e.g., "Year 2/Term 4/vectorstore/"
-
-    Returns:
-        bool: True if at least one file exists in the prefix, False otherwise.
-    """
-    # List blobs with the prefix in the existing bucket
-    blobs = list(gcs_bucket.list_blobs(prefix=gcs_prefix))
-    if blobs:
-        print(f"[DEBUG] Found {len(blobs)} files in GCS for prefix '{gcs_prefix}'")
-        return True
-    else:
-        print(f"[DEBUG] No files found in GCS for prefix '{gcs_prefix}'")
-        return False
-
 
 
 
@@ -914,22 +898,12 @@ processed_pdfs = set()  # Keep track of PDFs processed in this session
 def ensure_vectorstores_for_all_pdfs(pdf_files):
     """
     Ensures vector stores are created for all PDFs in the provided list.
-    Checks GCS for existing vectorstore folders and uses session memory
-    to avoid duplicate work.
+    Uses GCS existence checks and session memory to avoid duplicate work.
     """
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-large",
-        openai_api_key=os.environ.get("OPENAI_API_KEY_S")
-    )
-
     for pdf in pdf_files:
         pdf_id = pdf.get("id")
         pdf_name = pdf.get("name", "Unknown")
         pdf_path = pdf.get("path")  # Full folder path from Drive
-        pdf_base_name = pdf_name.rsplit(".", 1)[0]
-
-        # Create a unique vectorstore prefix per PDF
-        vectorstore_prefix = os.path.join(os.path.dirname(pdf_path), "vectorstore", pdf_base_name) + "/"
 
         if not pdf_id:
             print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
@@ -940,25 +914,23 @@ def ensure_vectorstores_for_all_pdfs(pdf_files):
             print(f"[DEBUG] PDF {pdf_name} already processed in this session. Skipping.")
             continue
 
-        # Skip if vectorstore already exists in GCS
-        if vectorstore_exists_in_gcs(vectorstore_prefix):
-            print(f"[DEBUG] Vectorstore already exists in GCS for PDF '{pdf_name}'. Skipping.")
+        # Skip if PDF already exists in GCS
+        if gcs_bucket.blob(pdf_path).exists():
+            print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping.")
             processed_pdfs.add(pdf_id)
             continue
 
         # Print before creating vector store
-        print(f"[INFO] Creating vector store for PDF: {pdf_name}, Path: {pdf_path}")
+        print(f"[DEBUG] Creating vector store for PDF: {pdf_name}, Path: {pdf_path}")
 
-        # Pass the PDF-specific prefix when creating the vectorstore
-        ensure_vectorstores_for_all_pdfs([pdf])
-
+        # Create vector store for this PDF
+        create_vectorstore_for_pdf(pdf)
 
         # Print after successful creation
-        print(f"[INFO] Vector store created for PDF: {pdf_name}")
+        print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
 
         # Mark as processed in memory
-        processed_pdfs.add(pdf_id)
- 
+        processed_pdfs.add(pdf_id) 
         
 def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
@@ -1065,6 +1037,13 @@ async def search_pdfs(
     if user_id not in user_contexts:
         user_contexts[user_id] = []
 
+    #------------------ mirroring google drive to google bucket
+    if not vectorstores_initialized:
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        print(f"[INFO] Initializing vector stores for all PDFs ({len(all_pdfs)}) on first run...")
+        ensure_vectorstores_for_all_pdfs(all_pdfs)
+        vectorstores_initialized = True
+
     results, top_chunks = [], []
 
     # -------------------- Step 0: Context gist --------------------
@@ -1085,36 +1064,7 @@ async def search_pdfs(
 
         for pdf in pdf_files:
             print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")
-
-        if pdf_files:
-            embeddings = OpenAIEmbeddings(
-                model="text-embedding-3-large",
-                openai_api_key=os.environ.get("OPENAI_API_KEY_S")
-            )
-            
-            for pdf in pdf_files:
-                pdf_name = pdf["name"]
-                pdf_base_name = pdf_name.rsplit(".", 1)[0]  # remove file extension
-                folder_path = os.path.dirname(pdf["path"])
-                
-                # Create a unique GCS prefix per PDF
-                gcs_prefix = os.path.join(folder_path, "vectorstore", pdf_base_name) + "/"
         
-                # Check if vectorstore already exists in GCS for this specific PDF
-                if not vectorstore_exists_in_gcs(gcs_prefix):
-                    print(f"[INFO] Vectorstore not found in GCS for '{pdf_name}', creating...")
-                    ensure_vectorstores_for_all_pdfs([pdf])
-
-                else:
-                    print(f"[DEBUG] Vectorstore already exists in GCS for '{pdf_name}'")
-
-            
-            vectorstores_initialized = True
-
-
-
-
-        #ensure_vectorstores_for_all_pdfs
         if not pdf_files:
             print(f"[WARNING] No PDFs found for '{class_name}'. Falling back to GPT only.")
             use_context_only = True
