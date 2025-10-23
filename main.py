@@ -950,7 +950,8 @@ def ensure_vectorstores_for_all_pdfs(pdf_files):
         print(f"[INFO] Creating vector store for PDF: {pdf_name}, Path: {pdf_path}")
 
         # Pass the PDF-specific prefix when creating the vectorstore
-        create_vectorstore_for_pdf(pdf, embeddings, vectorstore_prefix)
+        ensure_vectorstores_for_all_pdfs([pdf])
+
 
         # Print after successful creation
         print(f"[INFO] Vector store created for PDF: {pdf_name}")
