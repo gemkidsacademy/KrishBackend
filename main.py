@@ -126,7 +126,7 @@ gcs_client = storage.Client(
 )
 
 # 4️⃣ Access your bucket
-gcs_bucket_name = "krishdemochatbot"
+gcs_bucket_name = "KrishChatBot"
 gcs_bucket = gcs_client.bucket(gcs_bucket_name)
 
 print(f"✅ Initialized GCS client for bucket: {gcs_bucket_name}")
