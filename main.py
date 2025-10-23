@@ -440,19 +440,44 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # --- Handle existing session and cleanup ---
+    existing_session = db.query(Session).filter(Session.user_id == user.id).first()
+    global vectorstores_initialized
+
+    if existing_session:
+        print(f"DEBUG: Existing session found for user {user.id}")
+        session_token = existing_session.session_token
+        public_token = existing_session.public_token
+
+        # Clear previous context for user if exists
+        if user.name in user_contexts:
+            user_contexts[user.name] = []
+            print(f"DEBUG: Cleared previous context for user {user.name}")
+
+        # Clear previous OTP for this user
+        if user.phone_number in otp_store:
+            del otp_store[user.phone_number]
+            print(f"DEBUG: Cleared previous OTP for {user.phone_number}")
+
+        # Ensure vector stores are marked as not initialized
+        vectorstores_initialized = False
+        print("DEBUG: vectorstores_initialized set to False")
+
+    # Prepare user info response
     user_info = {
         "id": user.id,
         "name": user.name,
         "phone_number": user.phone_number,
-        "class_name": user.class_name,  # <-- include class name here
+        "class_name": user.class_name,
         # optionally add session_token or other fields if needed
     }
 
-    # Clear OTP from memory after successful verification
-    del otp_store[data.phone_number]
+    # Clear OTP from memory after successful verification (already handled in existing session case)
+    otp_store.pop(data.phone_number, None)
     print(f"[DEBUG] Cleared OTP for {data.phone_number} after successful verification")
 
     return {"message": "OTP verified successfully", "user": user_info}
+
 
 @app.post("/login")
 async def login(
