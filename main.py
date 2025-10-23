@@ -60,7 +60,7 @@ user_contexts: dict[str, list[dict[str, str]]] = {}
 #for creating user passwords
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
+vectorstores_initialized = False
 
 #-------------------------------- for Twilio
 account_sid = os.getenv("TWILIO_ACCOUNT_SID")
@@ -516,6 +516,7 @@ async def login(
     try:
         existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
         if existing_session:
+            global vectorstores_initialized 
             print(f"DEBUG: Existing session found for user {user.id}")
             session_token = existing_session.session_token
             public_token = existing_session.public_token
@@ -526,6 +527,9 @@ async def login(
             if user.phone_number in otp_store:
                 del otp_store[user.phone_number]
                 print(f"DEBUG: Cleared previous OTP for {user.phone_number}")
+            # Ensure vector stores are marked as not initialized
+            vectorstores_initialized = False
+            print("DEBUG: vectorstores_initialized set to False")
 
         else:
             print("DEBUG: No session found, creating a new one...")
@@ -1023,7 +1027,7 @@ def append_to_user_context(user_id, role, content, pdf_meta=None):
 
 
 
-vectorstores_initialized = False
+
 
 @app.get("/search")
 async def search_pdfs(
