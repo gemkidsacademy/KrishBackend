@@ -1106,15 +1106,17 @@ async def search_pdfs(
         for pdf in pdf_files:
             pdf_name = pdf["name"]
             pdf_base_name = pdf_name.rsplit(".", 1)[0]
-            gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), "vectorstore") + "/"
+            # Use unique vector store folder per PDF
+            gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), f"vectorstore_{pdf_base_name}") + "/"
             print(f"[DEBUG] Loading vectorstore from GCS for PDF: {pdf_name}, prefix: {gcs_prefix}")
-    
+        
             try:
                 vectorstore: FAISS = load_vectorstore_from_gcs(gcs_prefix, embeddings)
                 print(f"[DEBUG] Vectorstore loaded for PDF: {pdf_name}")
             except Exception as e:
                 print(f"[ERROR] Failed to load vectorstore for {pdf_name}: {e}")
                 continue
+
     
             if hasattr(vectorstore, "index") and hasattr(vectorstore.index, "normalize_L2"):
                 vectorstore.index.normalize_L2()
