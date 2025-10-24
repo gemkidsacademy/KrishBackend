@@ -1180,7 +1180,7 @@ async def search_pdfs(
         4. Style: {reasoning_instruction}
         """
 
-    print("[DEBUG] GPT PROMPT PREVIEW:", gpt_prompt[:800])
+    print("[DEBUG] GPT PROMPT PREVIEW:", gpt_prompt)
 
     # -------------------- Step 4: Call GPT --------------------
     answer_response = openai_client.chat.completions.create(
