@@ -69,7 +69,7 @@ twilio_number = os.getenv("TWILIO_PHONE_NUMBER")
 client = Client(account_sid, auth_token)
 # Temporary in-memory OTP storage
 otp_store = {}
-
+user_vectorstores_initialized = {} 
 
 # -----------------------------
 # App & CORS
@@ -459,8 +459,9 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
             print(f"DEBUG: Cleared previous OTP for {user.phone_number}")
 
         # Reset vector stores flag
-        vectorstores_initialized = False
-        print("DEBUG: vectorstores_initialized set to False")
+        # Reset per-user vectorstore flag
+        user_vectorstores_initialized[user.name] = False
+        print(f"DEBUG: vectorstores_initialized for user {user.name} set to False")
 
     # --- Clear OTP after successful verification ---
     otp_store.pop(data.phone_number, None)
@@ -1065,11 +1066,11 @@ async def search_pdfs(
         print(f"[DEBUG] Created new context for user: {user_id}")
 
     # ------------------ Initialize vector stores ------------------
-    if not vectorstores_initialized:
+    if not user_vectorstores_initialized.get(user_id, False):
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
-        print(f"[INFO] Initializing vector stores for all PDFs ({len(all_pdfs)}) on first run...")
         ensure_vectorstores_for_all_pdfs(all_pdfs)
-        vectorstores_initialized = True
+        user_vectorstores_initialized[user_id] = True
+        print(f"[INFO] Vector stores initialized for user {user_id}")
 
     results, top_chunks = [], []
 
