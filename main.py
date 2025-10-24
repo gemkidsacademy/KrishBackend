@@ -1145,40 +1145,49 @@ async def search_pdfs(
 
     # -------------------- Step 3: Prepare GPT prompt --------------------
     reasoning_instruction = {
-        "simple": "Answer concisely in simple language.",
-        "medium": "Answer with moderate detail.",
-        "advanced": "Provide an in-depth, analytical answer."
-    }.get(reasoning, "Answer concisely in simple language.")
+        "simple": "Use plain, beginner-friendly language. Keep sentences short and avoid jargon.",
+        "medium": "Give a balanced explanation — clear, moderately detailed, and easy to follow.",
+        "advanced": "Provide a detailed, analytical, and example-rich explanation that shows expert understanding."
+    }.get(reasoning, "Use plain, beginner-friendly language.")
 
     if use_context_only or not top_chunks:
         gpt_prompt = f"""
-        Use only the previous conversation context to answer:
-        {context_gist}
-    
-        Question: {query}
+        You are an assistant. Follow the instructions below carefully.
     
         Style: {reasoning_instruction}
     
-        Answer concisely. Prepend "[GPT answer]" if relying on own knowledge.
+        Use only the previous conversation context to answer:
+        {context_gist}
+    
+        Question:
+        {query}
+    
+        Guidelines:
+        - Do not use any external knowledge beyond the conversation.
+        - Prepend "[GPT answer]" if relying on your own understanding.
         """
-
     else:
         gpt_prompt = f"""
-        You are an assistant. Use the following to answer:
+        You are an assistant. Follow the instructions below carefully.
+    
+        Style: {reasoning_instruction}
+    
+        Use the following to answer:
         Previous conversation context:
         {context_gist}
-
+    
         PDF Chunks:
         {context_texts_str}
-
-        Question: {query}
-
-        Instructions:
-        1. Use PDF chunks if relevant.
-        2. Do not invent facts.
+    
+        Question:
+        {query}
+    
+        Guidelines:
+        1. Use PDF chunks if they are relevant to the question.
+        2. Do not invent facts or add information not found in context or PDFs.
         3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
-        4. Style: {reasoning_instruction}
         """
+
 
     print("[DEBUG] GPT PROMPT PREVIEW:", gpt_prompt)
 
