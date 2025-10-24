@@ -1056,8 +1056,15 @@ def append_to_user_context(user_id, role, content, pdf_meta=None):
     user_contexts[user_id].append(entry)
 
 
+def gcs_vectorstore_exists(prefix: str) -> bool:
+    """
+    Check if a vectorstore folder exists in GCS for the given prefix.
+    Returns True if any files exist under that prefix.
+    """
+    blobs = list(gcs_bucket.list_blobs(prefix=prefix))
+    print(f"[DEBUG] Checking GCS vectorstore existence for prefix: '{prefix}', found {len(blobs)} files")
+    return len(blobs) > 0
 
-vectorstores_initialized = False
 
 @app.get("/search")
 async def search_pdfs(
@@ -1075,11 +1082,26 @@ async def search_pdfs(
         print(f"[DEBUG] Created new context for user: {user_id}")
 
     # ------------------ Initialize vector stores ------------------
-    if not user_vectorstores_initialized.get(user_id, False):
-        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
-        ensure_vectorstores_for_all_pdfs(all_pdfs)
-        user_vectorstores_initialized[user_id] = True
-        print(f"[INFO] Vector stores initialized for user {user_id}")
+    # ------------------ Ensure vector stores exist ------------------
+    all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+    missing_vectorstores = []
+    
+    for pdf in all_pdfs:
+        pdf_name = pdf["name"]
+        pdf_base_name = pdf_name.rsplit(".", 1)[0]
+        gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), f"vectorstore_{pdf_base_name}") + "/"
+    
+        if not gcs_vectorstore_exists(gcs_prefix):  # <-- new helper function
+            missing_vectorstores.append(pdf)
+    
+    if missing_vectorstores:
+        print(f"[DEBUG] Missing vectorstores for {len(missing_vectorstores)} PDFs, generating them...")
+        ensure_vectorstores_for_all_pdfs(missing_vectorstores)
+    else:
+        print(f"[DEBUG] All vectorstores exist for user {user_id}")
+    
+    user_vectorstores_initialized[user_id] = True
+    print(f"[INFO] Vector stores initialized for user {user_id}")
 
     results, top_chunks = [], []
 
