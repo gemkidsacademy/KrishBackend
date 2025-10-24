@@ -885,11 +885,14 @@ def create_vectorstore_for_pdf(pdf_file):
         return
 
     # Step 4: Save vector store recursively to GCS
+    # Step 4: Save vector store recursively to GCS
     try:
-        gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore/"
+        pdf_base_name = pdf_name.rsplit('.', 1)[0]
+        gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore_{pdf_base_name}/"  # unique per PDF
+    
         with tempfile.TemporaryDirectory() as tmp_dir:
             vs.save_local(tmp_dir)
-
+    
             # Recursively upload all vector store files
             for root, dirs, files in os.walk(tmp_dir):
                 for filename in files:
@@ -898,7 +901,7 @@ def create_vectorstore_for_pdf(pdf_file):
                     blob_name = f"{gcs_prefix_vs}{relative_path.replace(os.sep, '/')}"
                     upload_to_gcs(open(path, "rb").read(), blob_name)
                     print(f"[DEBUG] Uploaded vector store file to GCS: {blob_name}")
-
+    
     except Exception as e:
         print(f"[ERROR] Failed to upload vector store for PDF {pdf_name} to GCS: {e}")
         return
