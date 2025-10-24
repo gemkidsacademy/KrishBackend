@@ -1056,14 +1056,15 @@ async def search_pdfs(
     user_id: str = Query(...),
     class_name: str = Query(None)  # optional, for folder filtering
 ):
-    print(f"\n==================== SEARCH REQUEST START ====================")
-    print(f"user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
+    print("\n==================== SEARCH REQUEST START ====================")
+    print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
 
     global vectorstores_initialized
     if user_id not in user_contexts:
         user_contexts[user_id] = []
+        print(f"[DEBUG] Created new context for user: {user_id}")
 
-    #------------------ mirroring google drive to google bucket
+    # ------------------ Initialize vector stores ------------------
     if not vectorstores_initialized:
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
         print(f"[INFO] Initializing vector stores for all PDFs ({len(all_pdfs)}) on first run...")
@@ -1078,6 +1079,9 @@ async def search_pdfs(
     query_type = classify_query_type(query, context_gist)
     if is_first_query:
         query_type = "pdf_only"
+        print(f"[DEBUG] First query for user, forcing query_type to 'pdf_only'")
+    else:
+        print(f"[DEBUG] Classified query_type: {query_type} based on context")
 
     use_context_only = query_type == "context_only"
 
@@ -1090,9 +1094,9 @@ async def search_pdfs(
 
         for pdf in pdf_files:
             print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")
-        
+
         if not pdf_files:
-            print(f"[WARNING] No PDFs found for '{class_name}'. Falling back to GPT only.")
+            print(f"[WARNING] No PDFs found for '{class_name}'. GPT will fallback to context-only or external knowledge")
             use_context_only = True
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
@@ -1103,14 +1107,14 @@ async def search_pdfs(
             model="text-embedding-3-large",
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
+
         rewritten_query = query
         for pdf in pdf_files:
             pdf_name = pdf["name"]
             pdf_base_name = pdf_name.rsplit(".", 1)[0]
-            # Use unique vector store folder per PDF
             gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), f"vectorstore_{pdf_base_name}") + "/"
             print(f"[DEBUG] Loading vectorstore from GCS for PDF: {pdf_name}, prefix: {gcs_prefix}")
-        
+
             try:
                 vectorstore: FAISS = load_vectorstore_from_gcs(gcs_prefix, embeddings)
                 print(f"[DEBUG] Vectorstore loaded for PDF: {pdf_name}")
@@ -1118,11 +1122,10 @@ async def search_pdfs(
                 print(f"[ERROR] Failed to load vectorstore for {pdf_name}: {e}")
                 continue
 
-    
             if hasattr(vectorstore, "index") and hasattr(vectorstore.index, "normalize_L2"):
                 vectorstore.index.normalize_L2()
                 print(f"[DEBUG] Normalized L2 for vectorstore: {pdf_name}")
-    
+
             try:
                 docs_with_scores = vectorstore.similarity_search_with_score(rewritten_query, k=TOP_K)
                 print(f"[DEBUG] Found {len(docs_with_scores)} chunks for PDF: {pdf_name}")
@@ -1130,24 +1133,24 @@ async def search_pdfs(
                     doc.metadata["pdf_name"] = pdf_name
                     doc.metadata["pdf_base_name"] = pdf_base_name
                     top_chunks.append((doc, score))
-                    print(f"[DEBUG] Chunk score: {score}, Page: {doc.metadata.get('page_number', 'N/A')}, Content snippet: {doc.page_content[:80]}...")
+                    print(f"[DEBUG] Chunk score: {score}, Page: {doc.metadata.get('page_number', 'N/A')}, Snippet: {doc.page_content[:80]}...")
             except Exception as e:
                 print(f"[ERROR] Similarity search failed for PDF {pdf_name}: {e}")
-        
-        # Sort top_chunks by score (ascending or descending depending on your FAISS config)
+
+        # Sort top_chunks by score (descending = most relevant first)
         top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
         print(f"[DEBUG] Total top chunks after sorting: {len(top_chunks)}")
-    
+
         if top_chunks:
             context_texts = [
                 f"PDF: {doc.metadata['pdf_name']} (Page {doc.metadata.get('page_number', 'N/A')})\n{doc.page_content}"
                 for doc, _ in top_chunks
             ]
             context_texts_str = "\n".join(context_texts)
-            print(f"[DEBUG] Context texts prepared, length: {len(context_texts_str)} characters")
+            print(f"[DEBUG] Context texts prepared, total length: {len(context_texts_str)} characters")
         else:
-            print(f"[DEBUG] No top chunks found, GPT will fallback to context-only or its own knowledge")
-
+            print(f"[DEBUG] No top chunks found, GPT will rely on context or external knowledge")
+            use_context_only = True
 
     # -------------------- Step 3: Prepare GPT prompt --------------------
     reasoning_instruction = {
@@ -1157,45 +1160,46 @@ async def search_pdfs(
     }.get(reasoning, "Use plain, beginner-friendly language.")
 
     if use_context_only or not top_chunks:
+        print("[INFO] GPT will rely on context or external knowledge ONLY")
         gpt_prompt = f"""
-        You are an assistant. Follow the instructions below carefully.
-    
-        Style: {reasoning_instruction}
-    
-        Use only the previous conversation context to answer:
-        {context_gist}
-    
-        Question:
-        {query}
-    
-        Guidelines:
-        - Do not use any external knowledge beyond the conversation.
-        - Prepend "[GPT answer]" if relying on your own understanding.
-        """
+You are an assistant. Follow the instructions below carefully.
+
+Style: {reasoning_instruction}
+
+Use only the previous conversation context to answer:
+{context_gist}
+
+Question:
+{query}
+
+Guidelines:
+- Do not use any external knowledge beyond the conversation.
+- Prepend "[GPT answer]" if relying on your own understanding.
+"""
     else:
+        print("[INFO] GPT will use PDF chunks + context")
         gpt_prompt = f"""
-        You are an assistant. Follow the instructions below carefully.
-    
-        Style: {reasoning_instruction}
-    
-        Use the following to answer:
-        Previous conversation context:
-        {context_gist}
-    
-        PDF Chunks:
-        {context_texts_str}
-    
-        Question:
-        {query}
-    
-        Guidelines:
-        1. Use PDF chunks if they are relevant to the question.
-        2. Do not invent facts or add information not found in context or PDFs.
-        3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
-        """
+You are an assistant. Follow the instructions below carefully.
 
+Style: {reasoning_instruction}
 
-    print("[DEBUG] GPT PROMPT PREVIEW:", gpt_prompt)
+Use the following to answer:
+Previous conversation context:
+{context_gist}
+
+PDF Chunks:
+{context_texts_str}
+
+Question:
+{query}
+
+Guidelines:
+1. Use PDF chunks if they are relevant to the question.
+2. Do not invent facts or add information not found in context or PDFs.
+3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
+"""
+
+    print("[DEBUG] GPT PROMPT PREVIEW (first 500 chars):", gpt_prompt[:500])
 
     # -------------------- Step 4: Call GPT --------------------
     answer_response = openai_client.chat.completions.create(
@@ -1205,7 +1209,7 @@ async def search_pdfs(
     )
 
     answer_text = answer_response.choices[0].message.content.strip()
-    print("[DEBUG] GPT RAW RESPONSE:", answer_text[:500])
+    print("[DEBUG] GPT RAW RESPONSE (first 500 chars):", answer_text[:500])
 
     # -------------------- Step 5: Determine Source --------------------
     if answer_text.startswith("[PDF-based answer]"):
@@ -1215,43 +1219,36 @@ async def search_pdfs(
         source_name = "GPT Answer"
         answer_text = answer_text.replace("[GPT answer]", "", 1).strip()
     else:
-        # If PDFs existed but model didn’t label response, infer by checking relevance
+        # Infer source if model didn’t label response
         if top_chunks and any(word in answer_text.lower() for word in ["page", "pdf", "worksheet"]):
             source_name = "Academy Answer"
         else:
             source_name = "GPT Answer"
 
-    # -------------------- Step 6: Add context if GPT used --------------------
-    if source_name == "GPT Answer":
-        answer_text = (
-            "The answer was not found in the available PDFs, so GPT is using its own external knowledge base. "
-            + answer_text
-        )
+    print(f"[INFO] Source detected: {source_name}")
 
-    # -------------------- Step 7: Collect PDF links --------------------
-    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
-
-    # -------------------- Step 8: Append PDF metadata if Academy Answer --------------------
+    # -------------------- Step 6: Append PDF metadata --------------------
     if source_name == "Academy Answer" and top_chunks:
         top_doc, _ = top_chunks[0]
         pdf_metadata = f"[PDF used: {top_doc.metadata['pdf_name']} (Page {top_doc.metadata.get('page_number','N/A')})]"
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
-    # -------------------- Step 9: Prepare results --------------------
+    # -------------------- Step 7: Prepare results --------------------
+    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+
     results.append({
         "name": f"**{source_name}**",
         "snippet": answer_text,
         "links": used_pdfs if source_name == "Academy Answer" else []
     })
 
-    # -------------------- Step 10: Update context --------------------
+    # -------------------- Step 8: Update user context --------------------
     append_to_user_context(user_id, "user", query)
     append_to_user_context(user_id, "assistant", answer_text)
 
-    print(f"[INFO] Source detected: {source_name}")
     print("==================== SEARCH REQUEST END ====================\n")
-
     return JSONResponse(results)
+
 
 
 
