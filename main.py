@@ -106,7 +106,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 drive_service = build("drive", "v3", credentials=creds)
 
-DEMO_FOLDER_ID = "1lyKKM94QxpLf0Re76_1rGuk5gCRWcuP0"
+DEMO_FOLDER_ID = "1aZzuN_1Yy4-yK6qi9RP7KEIu2otFjFdj"
 
 # -----------------------------
 # Google Cloud Storage Setup
