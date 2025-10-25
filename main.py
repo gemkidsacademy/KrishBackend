@@ -572,10 +572,10 @@ async def login(
     try:
         from werkzeug.security import check_password_hash
     
-        print("DEBUG: Stored hash in DB:", user.password)
+        print("DEBUG: Stored password in DB:", user.password)
         print("DEBUG: Password provided by user:", password)
         
-        password_verified = verify_scrypt_password(user.password, password)
+        password_verified = user.password == password  # plain comparison
         print("DEBUG: Password verification result:", password_verified)
     except Exception as e:
         print("ERROR during password verification:", e)
