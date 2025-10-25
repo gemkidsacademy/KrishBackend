@@ -3,7 +3,8 @@ import random
 import time
 from dotenv import load_dotenv
 from typing import Optional, List
-
+import hashlib
+import binascii
 
 
 #Twilio API
@@ -488,6 +489,38 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal server error during OTP verification")
 
 
+def verify_scrypt_password(stored_hash: str, password: str) -> bool:
+    """
+    Verify a password against a scrypt hash stored in the format:
+    scrypt:N:R:HEX_HASH
+    """
+    try:
+        algo, n_str, r_str, hex_hash = stored_hash.split(":")
+        if algo != "scrypt":
+            raise ValueError("Unsupported hash algorithm")
+
+        n = int(n_str)
+        r = int(r_str)
+
+        # If a salt was used when hashing, set it here
+        salt = b""  # replace with actual salt if any
+
+        key = hashlib.scrypt(
+            password.encode(),
+            salt=salt,
+            n=n,
+            r=r,
+            p=1,
+            maxmem=0,
+            dklen=64
+        )
+
+        return binascii.hexlify(key).decode() == hex_hash
+
+    except Exception as e:
+        print("Error verifying password:", e)
+        return False
+
 @app.post("/login")
 async def login(
     login_request: LoginRequest,
@@ -533,8 +566,8 @@ async def login(
     
         print("DEBUG: Stored hash in DB:", user.password)
         print("DEBUG: Password provided by user:", password)
-    
-        password_verified = check_password_hash(user.password, password)
+        
+        password_verified = verify_scrypt_password(user.password, password)
         print("DEBUG: Password verification result:", password_verified)
     except Exception as e:
         print("ERROR during password verification:", e)
