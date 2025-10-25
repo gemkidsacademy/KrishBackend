@@ -493,28 +493,36 @@ def verify_scrypt_password(stored_hash: str, password: str) -> bool:
     """
     Verify a password against a scrypt hash stored in the format:
     scrypt:N:R:HEX_HASH
+    Uses a memory limit to avoid exceeding process limits.
     """
     try:
+        # Split the stored hash
         algo, n_str, r_str, hex_hash = stored_hash.split(":")
         if algo != "scrypt":
             raise ValueError("Unsupported hash algorithm")
 
+        # Convert parameters to integers
         n = int(n_str)
         r = int(r_str)
 
-        # If a salt was used when hashing, set it here
-        salt = b""  # replace with actual salt if any
+        # Set the salt if used when hashing
+        salt = b""  # replace with actual salt if applicable
 
+        # Set a safe memory limit (64 MB)
+        max_memory = 64 * 1024 * 1024  # 64 MB
+
+        # Derive key from input password
         key = hashlib.scrypt(
             password.encode(),
             salt=salt,
             n=n,
             r=r,
             p=1,
-            maxmem=0,
+            maxmem=max_memory,
             dklen=64
         )
 
+        # Compare the derived key with stored hash
         return binascii.hexlify(key).decode() == hex_hash
 
     except Exception as e:
