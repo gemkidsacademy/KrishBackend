@@ -1,4 +1,4 @@
-
+import base64
 import random
 import time
 from dotenv import load_dotenv
@@ -493,42 +493,41 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
 def verify_scrypt_password(stored_hash: str, password: str) -> bool:
     """
     Verify a password against a scrypt hash stored in the format:
-    scrypt:N:R:HEX_HASH
-    Uses a memory limit to avoid exceeding process limits.
+    scrypt:N:r:p$salt$derived_key
     """
     try:
-        # Split the stored hash
-        algo, n_str, r_str, hex_hash = stored_hash.split(":")
+        # Split the stored hash into components
+        algo_params, salt_b64, key_hex = stored_hash.split("$")
+        algo, n_str, r_str, p_str = algo_params.split(":")
+
         if algo != "scrypt":
             raise ValueError("Unsupported hash algorithm")
 
-        # Convert parameters to integers
+        # Convert parameters
         n = int(n_str)
         r = int(r_str)
+        p = int(p_str)
 
-        # Set the salt if used when hashing
-        salt = b""  # replace with actual salt if applicable
+        # Decode salt
+        salt = base64.b64decode(salt_b64)
 
-        # Set a safe memory limit (64 MB)
-        max_memory = 64 * 1024 * 1024  # 64 MB
-
-        # Derive key from input password
-        key = hashlib.scrypt(
+        # Derive key from input password using same parameters
+        derived_key = hashlib.scrypt(
             password.encode(),
             salt=salt,
             n=n,
             r=r,
-            p=1,
-            maxmem=max_memory,
+            p=p,
             dklen=64
         )
 
-        # Compare the derived key with stored hash
-        return binascii.hexlify(key).decode() == hex_hash
+        # Compare derived key with stored key
+        return binascii.hexlify(derived_key).decode() == key_hex
 
     except Exception as e:
         print("Error verifying password:", e)
         return False
+        
 
 @app.post("/login")
 async def login(
