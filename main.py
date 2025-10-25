@@ -485,7 +485,7 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
 
     except Exception as e:
         # Catch-all for unexpected errors
-        print(f"[ERROR] Unexpected exception during OTP verification for {data.phone_number}: {e}", exc_info=True)
+        print(f"[ERROR] Unexpected exception during OTP verification for {data.phone_number}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error during OTP verification")
 
 
