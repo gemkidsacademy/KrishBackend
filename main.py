@@ -84,7 +84,8 @@ app.add_middleware(
     allow_origins=[
         "https://krish-chat-bot.vercel.app",
         "https://krish-chat-bot-new.vercel.app",
-        "http://localhost:3000"
+        "https://chatbot.gemkidsacademy.com.au",
+        "http://localhost:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],  # or ["GET", "POST", "OPTIONS"]
