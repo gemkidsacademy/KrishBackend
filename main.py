@@ -617,6 +617,35 @@ def get_next_user_id(db: Session = Depends(get_db)):
     next_id = (last_user.id + 1) if last_user else 1
     return next_id
 
+
+
+def give_drive_access(file_id: str, emails: str, role: str = "reader"):
+    """
+    Grants access to a Google Drive file/folder for a list of emails.
+    
+    :param file_id: ID of the Drive file/folder
+    :param emails: Comma-separated string of emails
+    :param role: "reader" or "writer"
+    """
+    # Split and clean the email list
+    email_list = [email.strip() for email in emails.split(",") if email.strip()]
+    
+    for email in email_list:
+        try:
+            drive_service.permissions().create(
+                fileId=file_id,
+                body={
+                    "type": "user",
+                    "role": role,
+                    "emailAddress": email
+                },
+                fields="id",
+                sendNotificationEmail=True  # optional: sends email notification to user
+            ).execute()
+            print(f"Access granted to {email}")
+        except HttpError as error:
+            print(f"Failed to give access to {email}: {error}")
+
 @app.post("/add_user")
 def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     # Check if email already exists
@@ -643,7 +672,11 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    return {"message": f"User '{new_user.name}' added successfully!"}
+    # ---------- Grant Google Drive Access ----------
+    
+    give_drive_access(DEMO_FOLDER_ID, user_request.email, role="reader")
+
+     return {"message": f"User '{new_user.name}' added successfully and Drive access granted!"}
 
 @app.put("/edit-user/{user_id}")
 def edit_user(
