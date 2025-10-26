@@ -1119,18 +1119,28 @@ async def search_pdfs(
     use_context_only = query_type == "context_only"
 
     # -------------------- Step 1: Retrieve PDFs --------------------
+    # -------------------- Step 1: Retrieve PDFs --------------------
     pdf_files = []
     if query_type in ("pdf_only", "mixed") and class_name:
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
-        pdf_files = [pdf for pdf in all_pdfs if pdf.get("path", "").lower().startswith(class_name.lower())]
-        print(f"[DEBUG] PDFs matching class '{class_name}': {len(pdf_files)}")
+        
+        # Split class_name into a list of folder names, trimming whitespace
+        class_names = [cn.strip().lower() for cn in class_name.split(",")]
 
+        # Keep PDFs whose path starts with any of the folder names
+        pdf_files = [
+            pdf for pdf in all_pdfs
+            if any(pdf.get("path", "").lower().startswith(cn) for cn in class_names)
+        ]
+
+        print(f"[DEBUG] PDFs matching classes {class_names}: {len(pdf_files)}")
         for pdf in pdf_files:
             print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")
 
         if not pdf_files:
             print(f"[WARNING] No PDFs found for '{class_name}'. GPT will fallback to context-only or external knowledge")
             use_context_only = True
+
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
