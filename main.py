@@ -676,7 +676,7 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     
     give_drive_access(DEMO_FOLDER_ID, user_request.email, role="reader")
 
-     return {"message": f"User '{new_user.name}' added successfully and Drive access granted!"}
+    return {"message": f"User '{new_user.name}' added successfully and Drive access granted!"}
 
 @app.put("/edit-user/{user_id}")
 def edit_user(
