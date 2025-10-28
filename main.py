@@ -1364,13 +1364,32 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
             )
 
         # --- Clean phone numbers ---
+        # --- Clean and normalize Australian phone numbers ---
         def fix_phone_number(x):
             if pd.isna(x):
                 return None
             try:
-                return str(int(float(x)))
+                phone = str(int(float(x)))  # Handle scientific notation like 4.12E+09
             except:
-                return str(x).strip().lstrip("'")
+                phone = str(x).strip().lstrip("'")
+        
+            phone = phone.replace(" ", "").replace("-", "")
+        
+            # --- Normalize for Australian format ---
+            if phone.startswith("+"):
+                return phone  # already correct
+            elif phone.startswith("04"):
+                return f"+61{phone[1:]}"  # Convert 04... -> +61...
+            elif phone.startswith("4"):
+                return f"+61{phone}"  # Convert 4... -> +614...
+            elif phone.startswith("61"):
+                return f"+{phone}"  # Ensure leading +
+            else:
+                return phone  # fallback for unexpected formats
+        
+        if "phone_number" in df.columns:
+            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
+
 
         if "phone_number" in df.columns:
             df["phone_number"] = df["phone_number"].apply(fix_phone_number)
