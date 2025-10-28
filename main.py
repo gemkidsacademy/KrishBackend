@@ -1328,104 +1328,66 @@ Guidelines:
 
 
 # Utility: hash password
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 # Bulk upload endpoint
 @app.post("/api/users/bulk")
 async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_db)):
     print("DEBUG: Bulk CSV upload request received")
 
-    # Only allow CSV files
     if not file.filename.endswith(".csv"):
         print(f"ERROR: Invalid file type: {file.filename}")
         raise HTTPException(status_code=400, detail="Invalid file type. CSV required.")
 
     try:
-        print(f"DEBUG: Reading CSV file: {file.filename}")
-        import csv
-        from io import StringIO
-
-        # Read file bytes and decode
-        contents = await file.read()
-        s = contents.decode("utf-8")
-
-        # Auto-detect delimiter
-        dialect = csv.Sniffer().sniff(s)
-        df = pd.read_csv(StringIO(s), sep=dialect.delimiter, dtype={"phone_number": str})
+        # Read CSV with engine='python' to auto-detect separator and preserve phone numbers
+        df = pd.read_csv(file.file, sep=None, engine='python', dtype={"phone_number": str})
         print(f"DEBUG: CSV file shape: {df.shape}")
-        print(f"DEBUG: Columns before normalization: {list(df.columns)}")
-
         if df.empty:
-            print("ERROR: CSV file is empty")
             raise HTTPException(status_code=400, detail="CSV file is empty")
 
-        # Normalize column names: strip spaces, lowercase
+        # Normalize columns
         df.columns = df.columns.str.strip().str.lower()
         print(f"DEBUG: Columns after normalization: {list(df.columns)}")
 
-        # Ensure required columns exist
         required_columns = {"name", "email"}
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
-            print(f"ERROR: Missing required columns: {missing_columns}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"CSV file must contain columns: {required_columns}",
-            )
+            raise HTTPException(status_code=400, detail=f"CSV file must contain columns: {required_columns}")
 
-        # Fix phone numbers (handles scientific notation or numeric)
-        def fix_phone_number(x):
-            try:
-                return str(int(float(x)))  # e.g., 9.23004E+11 -> 923004112884
-            except:
-                return str(x).strip().lstrip("'")  # fallback
-
+        # Fix phone numbers
         if "phone_number" in df.columns:
-            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
+            df["phone_number"] = df["phone_number"].apply(lambda x: str(x).split('.')[0].strip().lstrip("'"))
 
         users_to_add = []
         for index, row in df.iterrows():
             try:
-                name = row["name"]
-                email = row["email"]
-                phone = row.get("phone_number", None)
-                class_name = row.get("class_name", None)
-                password_raw = row.get("password") or secrets.token_urlsafe(8)
-                password_hashed = hash_password(password_raw)
-
-                print(f"DEBUG: Processing row {index}: {name}, {email}")
-
                 user_obj = User(
-                    name=name,
-                    email=email,
-                    phone_number=phone,
-                    class_name=class_name,
-                    password=password_hashed,
+                    name=row["name"],
+                    email=row["email"],
+                    phone_number=row.get("phone_number"),
+                    class_name=row.get("class_name"),
+                    password=row.get("password") or "placeholder",  # treat as normal string
                 )
                 users_to_add.append(user_obj)
-
-            except Exception as row_err:
-                print(f"ERROR: Error processing row {index}: {row_err}")
+                print(f"DEBUG: Prepared user {index}: {row['name']} - {row['email']}")
+            except Exception as e:
+                print(f"ERROR: Skipping row {index} due to error: {e}")
                 continue
 
         if not users_to_add:
-            print("ERROR: No valid users found in CSV file")
             raise HTTPException(status_code=400, detail="No valid users to add")
 
-        # Insert users into DB
-        print(f"DEBUG: Inserting {len(users_to_add)} users into the database")
         db.add_all(users_to_add)
         db.commit()
-        print("DEBUG: Users successfully inserted into database")
+        print(f"DEBUG: Inserted {len(users_to_add)} users into the database")
 
-        # Grant Drive access for each user
+        # Give Drive access
         for u in users_to_add:
             try:
                 print(f"DEBUG: Giving Drive access to {u.email}")
                 give_drive_access(DEMO_FOLDER_ID, u.email, role="reader")
-            except Exception as drive_err:
-                print(f"ERROR: Failed to give Drive access to {u.email}: {drive_err}")
+            except Exception as e:
+                print(f"ERROR: Failed to give Drive access to {u.email}: {e}")
                 continue
 
         return {
@@ -1443,7 +1405,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 
