@@ -659,7 +659,7 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
 
     # Create new user instance
     new_user = User(
-        id=user_request.id,
+        
         name=user_request.name,
         email=user_request.email,
         phone_number=user_request.phone_number,
