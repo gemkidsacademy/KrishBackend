@@ -1338,19 +1338,19 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         raise HTTPException(status_code=400, detail="Invalid file type. CSV required.")
 
     try:
-        # Read CSV with engine='python' to auto-detect separator and preserve phone numbers
+        # Read CSV file safely
         df = pd.read_csv(
             file.file,
             sep=None,
-            engine='python',
+            engine="python",
             dtype={"phone_number": str},
-            encoding="utf-8-sig"  # remove BOM if present
+            encoding="utf-8-sig"
         )
 
         if df.empty:
             raise HTTPException(status_code=400, detail="CSV file is empty")
 
-        # Normalize columns
+        # Normalize column names
         df.columns = df.columns.str.strip().str.lower()
         print(f"DEBUG: Columns after normalization: {list(df.columns)}")
 
@@ -1363,49 +1363,73 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                 detail=f"CSV file must contain columns: {required_columns}"
             )
 
-        # Clean phone numbers
+        # --- Clean phone numbers ---
         def fix_phone_number(x):
+            if pd.isna(x):
+                return None
             try:
-                return str(int(float(x)))  # handles numeric / scientific notation
+                return str(int(float(x)))
             except:
-                return str(x).strip().lstrip("'")  # fallback: string with quotes
+                return str(x).strip().lstrip("'")
 
         if "phone_number" in df.columns:
             df["phone_number"] = df["phone_number"].apply(fix_phone_number)
 
-        # Fetch existing emails from DB to skip duplicates
-        existing_emails = {u.email for u in db.query(User.email).all()}
+        # --- Fetch existing emails and phone numbers from DB ---
+        existing_users = db.query(User.email, User.phone_number).all()
+        existing_emails = {u.email for u in existing_users if u.email}
+        existing_phones = {u.phone_number for u in existing_users if u.phone_number}
+
+        print(f"DEBUG: Existing emails: {len(existing_emails)}, phones: {len(existing_phones)}")
 
         users_to_add = []
+        skipped_users = []  # track skipped duplicates
+
         for index, row in df.iterrows():
-            email = row["email"].strip()
-            if email in existing_emails:
-                print(f"DEBUG: Skipping existing email {email}")
-                continue  # skip duplicates
+            email = row.get("email", "").strip()
+            phone = row.get("phone_number")
+
+            # Skip duplicates
+            if email in existing_emails or (phone and phone in existing_phones):
+                skipped_users.append({
+                    "name": row.get("name"),
+                    "email": email,
+                    "phone_number": phone,
+                    "reason": "Duplicate email or phone number"
+                })
+                print(f"DEBUG: Skipped duplicate -> {email} / {phone}")
+                continue
 
             try:
                 user_obj = User(
                     name=row["name"].strip(),
                     email=email,
-                    phone_number=row.get("phone_number"),
+                    phone_number=phone,
                     class_name=row.get("class_name"),
-                    password=row.get("password") or "placeholder",  # treat as normal string
+                    password=row.get("password") or "placeholder",
                 )
                 users_to_add.append(user_obj)
-                print(f"DEBUG: Prepared user {index}: {row['name']} - {email}")
+                print(f"DEBUG: Prepared new user {index}: {email}")
             except Exception as e:
-                print(f"ERROR: Skipping row {index} due to error: {e}")
+                skipped_users.append({
+                    "name": row.get("name"),
+                    "email": email,
+                    "phone_number": phone,
+                    "reason": f"Error processing row: {e}"
+                })
+                print(f"ERROR: Failed to process row {index}: {e}")
                 continue
 
-        if not users_to_add:
-            raise HTTPException(status_code=400, detail="No valid users to add")
+        if not users_to_add and not skipped_users:
+            raise HTTPException(status_code=400, detail="No valid users found in CSV")
 
-        # Insert users (IDs are auto-generated)
-        db.add_all(users_to_add)
-        db.commit()
-        print(f"DEBUG: Inserted {len(users_to_add)} users into the database")
+        # --- Insert new users ---
+        if users_to_add:
+            db.add_all(users_to_add)
+            db.commit()
+            print(f"DEBUG: Inserted {len(users_to_add)} users into the database")
 
-        # Give Google Drive access
+        # --- Grant Google Drive access ---
         for u in users_to_add:
             try:
                 give_drive_access(DEMO_FOLDER_ID, u.email, role="reader")
@@ -1413,9 +1437,9 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
             except Exception as e:
                 print(f"ERROR: Failed to give Drive access to {u.email}: {e}")
 
-        # Return added users without passwords
+        # --- Return detailed response ---
         return {
-            "users": [
+            "added_users": [
                 {
                     "name": u.name,
                     "email": u.email,
@@ -1423,13 +1447,18 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                     "class_name": u.class_name,
                 }
                 for u in users_to_add
-            ]
+            ],
+            "skipped_users": skipped_users,
+            "summary": {
+                "added": len(users_to_add),
+                "skipped": len(skipped_users),
+                "total_rows": len(df),
+            }
         }
 
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 
