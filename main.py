@@ -1342,7 +1342,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
     try:
         print(f"DEBUG: Reading CSV file: {file.filename}")
-        df = pd.read_csv(file.file)
+        df = pd.read_csv(file.file, dtype={"phone_number": str})
         print(f"DEBUG: CSV file shape: {df.shape}")
 
         if df.empty:
@@ -1372,15 +1372,16 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
                 print(f"DEBUG: Processing row {index}: {name}, {email}")
 
-                users_to_add.append(
-                    User(
-                        name=name,
-                        email=email,
-                        phone_number=phone,
-                        class_name=class_name,
-                        password=password_hashed,
-                    )
+                # Prepare user object
+                user_obj = User(
+                    name=name,
+                    email=email,
+                    phone_number=phone,
+                    class_name=class_name,
+                    password=password_hashed,
                 )
+                users_to_add.append(user_obj)
+
             except Exception as row_err:
                 print(f"ERROR: Error processing row {index}: {row_err}")
                 continue  # skip problematic row
@@ -1394,6 +1395,15 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         db.add_all(users_to_add)
         db.commit()
         print("DEBUG: Users successfully inserted into database")
+
+        # Grant Google Drive access for each user
+        for u in users_to_add:
+            try:
+                print(f"DEBUG: Giving Drive access to {u.email}")
+                give_drive_access(DEMO_FOLDER_ID, u.email, role="reader")
+            except Exception as drive_err:
+                print(f"ERROR: Failed to give Drive access to {u.email}: {drive_err}")
+                continue
 
         # Return added users (without passwords)
         return {
