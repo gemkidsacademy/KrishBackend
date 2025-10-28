@@ -1343,18 +1343,18 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
     try:
         print(f"DEBUG: Reading CSV file: {file.filename}")
-        import csv
-
+        # Read CSV with engine='python' to auto-detect separator and preserve phone numbers as string
         df = pd.read_csv(file.file, sep=None, engine='python', dtype={"phone_number": str})
-
         print(f"DEBUG: CSV file shape: {df.shape}")
 
         if df.empty:
             print("ERROR: CSV file is empty")
             raise HTTPException(status_code=400, detail="CSV file is empty")
 
-        # Normalize columns to lowercase
-        df.columns = df.columns.str.lower()
+        # Normalize columns to lowercase and strip whitespace
+        df.columns = df.columns.str.strip().str.lower()
+
+        # Ensure required columns exist
         required_columns = {"name", "email"}
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
@@ -1363,6 +1363,16 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                 status_code=400,
                 detail=f"CSV file must contain columns: {required_columns}",
             )
+
+        # Clean and fix phone numbers (handles scientific notation, leading quotes)
+        def fix_phone_number(x):
+            try:
+                return str(int(float(x)))  # scientific notation or numeric strings
+            except:
+                return str(x).strip().lstrip("'")  # fallback: string with leading quote
+
+        if "phone_number" in df.columns:
+            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
 
         users_to_add = []
         for index, row in df.iterrows():
@@ -1425,8 +1435,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
 
 
 
