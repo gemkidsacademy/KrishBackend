@@ -1335,7 +1335,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     print("DEBUG: Bulk CSV upload request received")
 
     if not file.filename.endswith(".csv"):
-        print(f"ERROR: Invalid file type: {file.filename}")
         raise HTTPException(status_code=400, detail="Invalid file type. CSV required.")
 
     try:
@@ -1347,65 +1346,39 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
             dtype={"phone_number": str},
             encoding="utf-8-sig"  # remove BOM if present
         )
-        
+
+        if df.empty:
+            raise HTTPException(status_code=400, detail="CSV file is empty")
+
         # Normalize columns
         df.columns = df.columns.str.strip().str.lower()
-        
-        # Required columns
+        print(f"DEBUG: Columns after normalization: {list(df.columns)}")
+
+        # Ensure required columns exist
         required_columns = {"name", "email"}
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
-            print(f"ERROR: Missing required columns: {missing_columns}")
             raise HTTPException(
                 status_code=400,
-                detail=f"CSV file must contain columns: {required_columns}",
+                detail=f"CSV file must contain columns: {required_columns}"
             )
-        
-        # Fix phone numbers
+
+        # Clean phone numbers
         def fix_phone_number(x):
             try:
-                return str(int(float(x)))
+                return str(int(float(x)))  # handles numeric / scientific notation
             except:
-                return str(x).strip().lstrip("'")
-        
+                return str(x).strip().lstrip("'")  # fallback: string with quotes
+
         if "phone_number" in df.columns:
             df["phone_number"] = df["phone_number"].apply(fix_phone_number)
-        
-        users_to_add = []
-        for index, row in df.iterrows():
-            try:
-                name = row["name"]
-                email = row["email"]
-                phone = row.get("phone_number", None)
-                class_name = row.get("class_name", None)
-                password_raw = row.get("password") or "default"  # treat as normal value
-                # password hashing removed, using placeholder for now
-        
-                print(f"DEBUG: Processing row {index}: {name}, {email}")
-        
-                user_obj = User(
-                    name=name,
-                    email=email,
-                    phone_number=phone,
-                    class_name=class_name,
-                    password=password_raw,
-                )
-                users_to_add.append(user_obj)
-        
-            except Exception as row_err:
-                print(f"ERROR: Error processing row {index}: {row_err}")
-                continue
-
-        # Fix phone numbers
-        if "phone_number" in df.columns:
-            df["phone_number"] = df["phone_number"].apply(lambda x: str(x).split('.')[0].strip().lstrip("'"))
 
         users_to_add = []
         for index, row in df.iterrows():
             try:
                 user_obj = User(
-                    name=row["name"],
-                    email=row["email"],
+                    name=row["name"].strip(),
+                    email=row["email"].strip(),
                     phone_number=row.get("phone_number"),
                     class_name=row.get("class_name"),
                     password=row.get("password") or "placeholder",  # treat as normal string
@@ -1419,19 +1392,20 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         if not users_to_add:
             raise HTTPException(status_code=400, detail="No valid users to add")
 
+        # Insert users (IDs are auto-generated)
         db.add_all(users_to_add)
         db.commit()
         print(f"DEBUG: Inserted {len(users_to_add)} users into the database")
 
-        # Give Drive access
+        # Give Google Drive access
         for u in users_to_add:
             try:
-                print(f"DEBUG: Giving Drive access to {u.email}")
                 give_drive_access(DEMO_FOLDER_ID, u.email, role="reader")
+                print(f"DEBUG: Granted Drive access to {u.email}")
             except Exception as e:
                 print(f"ERROR: Failed to give Drive access to {u.email}: {e}")
-                continue
 
+        # Return added users without passwords
         return {
             "users": [
                 {
@@ -1447,6 +1421,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
