@@ -1343,16 +1343,26 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
     try:
         print(f"DEBUG: Reading CSV file: {file.filename}")
-        # Read CSV with engine='python' to auto-detect separator and preserve phone numbers as string
-        df = pd.read_csv(file.file, sep=None, engine='python', dtype={"phone_number": str})
+        import csv
+        from io import StringIO
+
+        # Read file bytes and decode
+        contents = await file.read()
+        s = contents.decode("utf-8")
+
+        # Auto-detect delimiter
+        dialect = csv.Sniffer().sniff(s)
+        df = pd.read_csv(StringIO(s), sep=dialect.delimiter, dtype={"phone_number": str})
         print(f"DEBUG: CSV file shape: {df.shape}")
+        print(f"DEBUG: Columns before normalization: {list(df.columns)}")
 
         if df.empty:
             print("ERROR: CSV file is empty")
             raise HTTPException(status_code=400, detail="CSV file is empty")
 
-        # Normalize columns to lowercase and strip whitespace
+        # Normalize column names: strip spaces, lowercase
         df.columns = df.columns.str.strip().str.lower()
+        print(f"DEBUG: Columns after normalization: {list(df.columns)}")
 
         # Ensure required columns exist
         required_columns = {"name", "email"}
@@ -1364,12 +1374,12 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                 detail=f"CSV file must contain columns: {required_columns}",
             )
 
-        # Clean and fix phone numbers (handles scientific notation, leading quotes)
+        # Fix phone numbers (handles scientific notation or numeric)
         def fix_phone_number(x):
             try:
-                return str(int(float(x)))  # scientific notation or numeric strings
+                return str(int(float(x)))  # e.g., 9.23004E+11 -> 923004112884
             except:
-                return str(x).strip().lstrip("'")  # fallback: string with leading quote
+                return str(x).strip().lstrip("'")  # fallback
 
         if "phone_number" in df.columns:
             df["phone_number"] = df["phone_number"].apply(fix_phone_number)
@@ -1386,7 +1396,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
                 print(f"DEBUG: Processing row {index}: {name}, {email}")
 
-                # Prepare user object
                 user_obj = User(
                     name=name,
                     email=email,
@@ -1398,19 +1407,19 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
             except Exception as row_err:
                 print(f"ERROR: Error processing row {index}: {row_err}")
-                continue  # skip problematic row
+                continue
 
         if not users_to_add:
             print("ERROR: No valid users found in CSV file")
             raise HTTPException(status_code=400, detail="No valid users to add")
 
-        # Insert users using injected DB session
+        # Insert users into DB
         print(f"DEBUG: Inserting {len(users_to_add)} users into the database")
         db.add_all(users_to_add)
         db.commit()
         print("DEBUG: Users successfully inserted into database")
 
-        # Grant Google Drive access for each user
+        # Grant Drive access for each user
         for u in users_to_add:
             try:
                 print(f"DEBUG: Giving Drive access to {u.email}")
@@ -1419,7 +1428,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                 print(f"ERROR: Failed to give Drive access to {u.email}: {drive_err}")
                 continue
 
-        # Return added users (without passwords)
         return {
             "users": [
                 {
