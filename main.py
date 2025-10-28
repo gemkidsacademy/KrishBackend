@@ -1340,19 +1340,61 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
     try:
         # Read CSV with engine='python' to auto-detect separator and preserve phone numbers
-        df = pd.read_csv(file.file, sep=None, engine='python', dtype={"phone_number": str})
-        print(f"DEBUG: CSV file shape: {df.shape}")
-        if df.empty:
-            raise HTTPException(status_code=400, detail="CSV file is empty")
-
+        df = pd.read_csv(
+            file.file,
+            sep=None,
+            engine='python',
+            dtype={"phone_number": str},
+            encoding="utf-8-sig"  # remove BOM if present
+        )
+        
         # Normalize columns
         df.columns = df.columns.str.strip().str.lower()
-        print(f"DEBUG: Columns after normalization: {list(df.columns)}")
-
+        
+        # Required columns
         required_columns = {"name", "email"}
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
-            raise HTTPException(status_code=400, detail=f"CSV file must contain columns: {required_columns}")
+            print(f"ERROR: Missing required columns: {missing_columns}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV file must contain columns: {required_columns}",
+            )
+        
+        # Fix phone numbers
+        def fix_phone_number(x):
+            try:
+                return str(int(float(x)))
+            except:
+                return str(x).strip().lstrip("'")
+        
+        if "phone_number" in df.columns:
+            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
+        
+        users_to_add = []
+        for index, row in df.iterrows():
+            try:
+                name = row["name"]
+                email = row["email"]
+                phone = row.get("phone_number", None)
+                class_name = row.get("class_name", None)
+                password_raw = row.get("password") or "default"  # treat as normal value
+                # password hashing removed, using placeholder for now
+        
+                print(f"DEBUG: Processing row {index}: {name}, {email}")
+        
+                user_obj = User(
+                    name=name,
+                    email=email,
+                    phone_number=phone,
+                    class_name=class_name,
+                    password=password_raw,
+                )
+                users_to_add.append(user_obj)
+        
+            except Exception as row_err:
+                print(f"ERROR: Error processing row {index}: {row_err}")
+                continue
 
         # Fix phone numbers
         if "phone_number" in df.columns:
