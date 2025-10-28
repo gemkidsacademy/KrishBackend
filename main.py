@@ -1343,7 +1343,10 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
 
     try:
         print(f"DEBUG: Reading CSV file: {file.filename}")
-        df = pd.read_csv(file.file, sep='\t', dtype={"phone_number": str})
+        import csv
+
+        df = pd.read_csv(file.file, sep=None, engine='python', dtype={"phone_number": str})
+
         print(f"DEBUG: CSV file shape: {df.shape}")
 
         if df.empty:
