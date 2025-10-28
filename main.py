@@ -2,6 +2,7 @@ import random
 import time
 from dotenv import load_dotenv
 from typing import Optional, List
+import pandas as pd
 
 
 
