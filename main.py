@@ -1373,18 +1373,26 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         if "phone_number" in df.columns:
             df["phone_number"] = df["phone_number"].apply(fix_phone_number)
 
+        # Fetch existing emails from DB to skip duplicates
+        existing_emails = {u.email for u in db.query(User.email).all()}
+
         users_to_add = []
         for index, row in df.iterrows():
+            email = row["email"].strip()
+            if email in existing_emails:
+                print(f"DEBUG: Skipping existing email {email}")
+                continue  # skip duplicates
+
             try:
                 user_obj = User(
                     name=row["name"].strip(),
-                    email=row["email"].strip(),
+                    email=email,
                     phone_number=row.get("phone_number"),
                     class_name=row.get("class_name"),
                     password=row.get("password") or "placeholder",  # treat as normal string
                 )
                 users_to_add.append(user_obj)
-                print(f"DEBUG: Prepared user {index}: {row['name']} - {row['email']}")
+                print(f"DEBUG: Prepared user {index}: {row['name']} - {email}")
             except Exception as e:
                 print(f"ERROR: Skipping row {index} due to error: {e}")
                 continue
@@ -1421,6 +1429,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
