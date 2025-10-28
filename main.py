@@ -1333,20 +1333,23 @@ def hash_password(password: str) -> str:
 # Bulk upload endpoint
 @app.post("/api/users/bulk")
 async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    print("DEBUG: Bulk upload request received")
+    print("DEBUG: Bulk CSV upload request received")
 
-    if not file.filename.endswith((".xlsx", ".xls")):
+    # Only allow CSV files
+    if not file.filename.endswith(".csv"):
         print(f"ERROR: Invalid file type: {file.filename}")
-        raise HTTPException(status_code=400, detail="Invalid file type")
+        raise HTTPException(status_code=400, detail="Invalid file type. CSV required.")
 
     try:
-        df = pd.read_excel(file.file)
-        print(f"DEBUG: Excel file shape: {df.shape}")
+        print(f"DEBUG: Reading CSV file: {file.filename}")
+        df = pd.read_csv(file.file)
+        print(f"DEBUG: CSV file shape: {df.shape}")
 
         if df.empty:
-            print("ERROR: Excel file is empty")
-            raise HTTPException(status_code=400, detail="Excel file is empty")
+            print("ERROR: CSV file is empty")
+            raise HTTPException(status_code=400, detail="CSV file is empty")
 
+        # Normalize columns to lowercase
         df.columns = df.columns.str.lower()
         required_columns = {"name", "email"}
         missing_columns = required_columns - set(df.columns)
@@ -1354,7 +1357,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
             print(f"ERROR: Missing required columns: {missing_columns}")
             raise HTTPException(
                 status_code=400,
-                detail=f"Excel file must contain columns: {required_columns}",
+                detail=f"CSV file must contain columns: {required_columns}",
             )
 
         users_to_add = []
@@ -1380,18 +1383,19 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                 )
             except Exception as row_err:
                 print(f"ERROR: Error processing row {index}: {row_err}")
-                continue
+                continue  # skip problematic row
 
         if not users_to_add:
-            print("ERROR: No valid users found in Excel file")
+            print("ERROR: No valid users found in CSV file")
             raise HTTPException(status_code=400, detail="No valid users to add")
 
-        # Use injected db session
+        # Insert users using injected DB session
         print(f"DEBUG: Inserting {len(users_to_add)} users into the database")
         db.add_all(users_to_add)
         db.commit()
         print("DEBUG: Users successfully inserted into database")
 
+        # Return added users (without passwords)
         return {
             "users": [
                 {
@@ -1407,6 +1411,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
