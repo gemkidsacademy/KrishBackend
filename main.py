@@ -620,6 +620,23 @@ async def login(
         print("ERROR during session handling:", e)
         raise HTTPException(status_code=500, detail="Session handling failed")
 
+    # --- Reset in-memory context and vectorstore flags ---
+    global user_contexts, user_vectorstores_initialized
+    
+    # Clear old context memory
+    user_contexts[user.name] = []
+    print(f"[DEBUG] Cleared in-memory chat context for {user.name}")
+    
+    # Reset vectorstore initialization
+    user_vectorstores_initialized[user.id] = False
+    print(f"[DEBUG] Reset vectorstore initialization flag for user {user.id}")
+    
+    # (Optional) If you have other memory states like conversation_gists:
+    if "conversation_gists" in globals():
+        conversation_gists[user.id] = ""
+        print(f"[DEBUG] Cleared context gist for user {user.id}")
+
+
     # Step 5: Set session cookie
     print("\n--- Step 5: Setting cookie ---")
     try:
