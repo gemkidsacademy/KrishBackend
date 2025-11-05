@@ -5,6 +5,7 @@
 #    pip-compile requirements.in
 #
 
+pandas
 
 
 aiohappyeyeballs==2.6.1
