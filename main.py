@@ -125,7 +125,7 @@ for f in folders:
 
 
 DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
-DEMO_FOLDER_ID = "1aZzuN_1Yy4-yK6qi9RP7KEIu2otFjFdj"
+
 
 # -----------------------------
 # Google Cloud Storage Setup
