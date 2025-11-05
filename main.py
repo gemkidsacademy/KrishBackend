@@ -1031,28 +1031,57 @@ def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> 
     Returns:
         FAISS: The loaded FAISS vector store instance.
     """
-    # Initialize Google Cloud Storage client
-    
+    print(f"\n[DEBUG][GCS-LOAD] ======== Starting load_vectorstore_from_gcs ========")
+    print(f"[DEBUG][GCS-LOAD] Prefix: {gcs_prefix}")
+    print(f"[DEBUG][GCS-LOAD] Embeddings type: {type(embeddings)}")
+    print(f"[DEBUG][GCS-LOAD] Embeddings model: {getattr(embeddings, 'model', 'Unknown')}")
 
-    # List all blobs under the given prefix
-    blobs = list(gcs_client.list_blobs(gcs_bucket_name, prefix=gcs_prefix))
-    if not blobs:
-        raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'.")
+    try:
+        # Ensure GCS client and bucket are available
+        if "gcs_client" not in globals() or "gcs_bucket_name" not in globals():
+            raise RuntimeError("GCS client or bucket name not initialized in globals()")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        # Download each blob to the temp directory
-        for blob in blobs:
-            file_path = os.path.join(tmp_dir, os.path.basename(blob.name))
-            blob.download_to_filename(file_path)
+        print(f"[DEBUG][GCS-LOAD] Using bucket: {gcs_bucket_name}")
 
-        # Load the vector store from the temp directory
-        vs = FAISS.load_local(
-            tmp_dir,
-            embeddings,
-            allow_dangerous_deserialization=True  # Safe for your own files
-        )
+        # List all blobs under the given prefix
+        blobs = list(gcs_client.list_blobs(gcs_bucket_name, prefix=gcs_prefix))
+        print(f"[DEBUG][GCS-LOAD] Found {len(blobs)} blobs for prefix '{gcs_prefix}'")
 
-    return vs
+        if not blobs:
+            raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'.")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            print(f"[DEBUG][GCS-LOAD] Created temporary directory: {tmp_dir}")
+
+            # Download each blob
+            for blob in blobs:
+                file_path = os.path.join(tmp_dir, os.path.basename(blob.name))
+                print(f"[DEBUG][GCS-LOAD] Downloading: {blob.name} → {file_path}")
+                blob.download_to_filename(file_path)
+
+            # Verify downloaded files
+            downloaded_files = os.listdir(tmp_dir)
+            print(f"[DEBUG][GCS-LOAD] Downloaded files: {downloaded_files}")
+
+            # Load the FAISS vectorstore
+            print(f"[DEBUG][GCS-LOAD] Loading FAISS index from temp dir...")
+            vs = FAISS.load_local(
+                tmp_dir,
+                embeddings,
+                allow_dangerous_deserialization=True  # safe for trusted environment
+            )
+
+            print(f"[DEBUG][GCS-LOAD] Successfully loaded FAISS store.")
+            print(f"[DEBUG][GCS-LOAD] ======== Finished load_vectorstore_from_gcs ========\n")
+
+            return vs
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR][GCS-LOAD] Exception in load_vectorstore_from_gcs(): {type(e).__name__} - {e}")
+        print("[ERROR][GCS-LOAD] Full traceback:")
+        traceback.print_exc()
+        raise  # Re-raise to surface the real cause
     
 SIMILARITY_THRESHOLD = 0.40  # cosine similarity threshold (adjust as needed)
 TOP_K = 5  # max chunks per PDF
