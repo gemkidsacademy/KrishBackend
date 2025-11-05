@@ -496,7 +496,7 @@ async def login(
     db: Session = Depends(get_db)
 ):
     print("\n==================== LOGIN ATTEMPT START ====================")
-    global user_contexts
+    global user_contexts, user_vectorstores_initialized 
 
     # Step 1: Log the incoming data
     try:
@@ -581,7 +581,7 @@ async def login(
         raise HTTPException(status_code=500, detail="Session handling failed")
 
     # --- Reset in-memory context and vectorstore flags ---
-    global user_contexts, user_vectorstores_initialized
+    
     
     # Clear old context memory
     user_contexts[user.name] = []
