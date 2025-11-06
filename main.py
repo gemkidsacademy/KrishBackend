@@ -108,23 +108,11 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 drive_service = build("drive", "v3", credentials=creds)
 
-# Query: only list folders, not trashed ones
-query = "mimeType='application/vnd.google-apps.folder' and trashed=false"
 
-results = drive_service.files().list(
-    q=query,
-    spaces="drive",
-    fields="files(id, name, webViewLink, owners, shared)",
-).execute()
-
-folders = results.get("files", [])
-
-print(f"\nFound {len(folders)} folders accessible to the service account:\n")
-for f in folders:
-    print(f"📁 {f['name']} — ID: {f['id']} — Link: {f['webViewLink']}")
+#DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
+DEMO_FOLDER_ID = "1aZzuN_1Yy4-yK6qi9RP7KEIu2otFjFdj"
 
 
-DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
 
 
 # -----------------------------
