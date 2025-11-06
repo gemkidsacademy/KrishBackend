@@ -109,8 +109,8 @@ creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPE
 drive_service = build("drive", "v3", credentials=creds)
 
 
-DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
-#DEMO_FOLDER_ID = "1aZzuN_1Yy4-yK6qi9RP7KEIu2otFjFdj"
+#DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
+DEMO_FOLDER_ID = "1aZzuN_1Yy4-yK6qi9RP7KEIu2otFjFdj"
 
 
 
@@ -763,14 +763,14 @@ def download_pdf(file_id):
 
 def list_pdfs(folder_id, path=""):
     """
-    Recursively list PDFs from Google Drive and track folder path.
-    Returns a list of dicts with 'id', 'name', 'webViewLink', and 'path'.
-    Includes detailed debug print statements.
+    Recursively list all PDFs from Google Drive starting at folder_id.
+    Returns a flat list of dicts: 'id', 'name', 'webViewLink', 'path'.
+    Handles any folder depth and prints detailed debug logs.
     """
     results = []
     page_token = None
 
-    print(f"DEBUG: Starting to list files in folder_id='{folder_id}' with path='{path}'")
+    print(f"DEBUG: Starting listing folder_id='{folder_id}' with path='{path}'")
 
     while True:
         response = drive_service.files().list(
@@ -781,7 +781,7 @@ def list_pdfs(folder_id, path=""):
         ).execute()
 
         files = response.get('files', [])
-        print(f"DEBUG: Retrieved {len(files)} files from folder_id='{folder_id}'")
+        print(f"DEBUG: Retrieved {len(files)} items from folder_id='{folder_id}'")
 
         for file in files:
             file_id = file['id']
@@ -789,39 +789,35 @@ def list_pdfs(folder_id, path=""):
             mime_type = file['mimeType']
             web_view_link = file.get('webViewLink', '')
 
+            current_path = f"{path}/{file_name}".lstrip("/")
+
             if mime_type == 'application/pdf':
-                pdf_path = f"{path}/{file_name}".lstrip("/")
                 results.append({
                     "id": file_id,
                     "name": file_name,
                     "webViewLink": web_view_link,
-                    "path": pdf_path
+                    "path": current_path
                 })
-                print(f"DEBUG: Found PDF -> id: {file_id}, name: '{file_name}', path: '{pdf_path}'")
+                print(f"DEBUG: Found PDF -> id: {file_id}, path: '{current_path}'")
 
             elif mime_type == 'application/vnd.google-apps.folder':
-                folder_path = f"{path}/{file_name}".lstrip("/")
-                print(f"DEBUG: Found folder -> id: {file_id}, name: '{file_name}', path: '{folder_path}'")
-                # Recursively list PDFs inside this folder
-                nested_results = list_pdfs(file_id, folder_path)
+                print(f"DEBUG: Found folder -> id: {file_id}, path: '{current_path}'")
+                # Recursive call for subfolder
+                nested_results = list_all_pdfs(file_id, current_path)
                 results.extend(nested_results)
-                print(f"DEBUG: Completed folder '{folder_path}', found {len(nested_results)} PDFs inside")
+                print(f"DEBUG: Completed folder '{current_path}', found {len(nested_results)} PDFs inside")
 
             else:
-                print(f"DEBUG: Skipping file -> id: {file_id}, name: '{file_name}', mimeType: '{mime_type}'")
+                print(f"DEBUG: Skipping file -> id: {file_id}, mimeType: '{mime_type}'")
 
         page_token = response.get('nextPageToken', None)
         if page_token:
             print(f"DEBUG: Next page token detected, continuing listing for folder_id='{folder_id}'")
         else:
-            print(f"DEBUG: No more pages in folder_id='{folder_id}', finishing listing")
-
-        if not page_token:
             break
 
     print(f"DEBUG: Finished listing folder_id='{folder_id}', total PDFs found so far: {len(results)}")
     return results
-
     
 def summarize_with_openai(snippet: str, query: str) -> str:
     prompt = f"""
