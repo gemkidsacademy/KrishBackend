@@ -113,6 +113,33 @@ drive_service = build("drive", "v3", credentials=creds)
 #DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
 DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
 
+try:
+    response = drive_service.files().list(
+        q=f"'{DEMO_FOLDER_ID}' in parents and trashed=false",
+        spaces='drive',
+        fields='nextPageToken, files(id, name, mimeType, webViewLink)',
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True
+    ).execute()
+
+    files = response.get('files', [])
+    print(f"[INFO] Total files found in folder {DEMO_FOLDER_ID}: {len(files)}")
+
+    if not files:
+        print("[WARNING] No files were returned. Possible causes:")
+        print("  - Folder ID is incorrect")
+        print("  - Service account lacks permission")
+        print("  - Folder is empty or files are not accessible")
+
+    for f in files:
+        file_id = f.get('id', '<missing_id>')
+        file_name = f.get('name', '<missing_name>')
+        mime_type = f.get('mimeType', '<missing_mimeType>')
+        web_view_link = f.get('webViewLink', '<no_link>')
+        print(f"[FILE] ID: {file_id}, Name: {file_name}, MimeType: {mime_type}, Link: {web_view_link}")
+
+except Exception as e:
+    print(f"[ERROR] Failed to list files in folder {DEMO_FOLDER_ID}: {e}")
 
 
 
@@ -1184,42 +1211,7 @@ def get_vectorstore_from_cache(gcs_prefix: str, embeddings):
 
     return vectorstore  
 
-def debug_list_files(folder_id, path=""):
-    """
-    Recursively list all files/folders the service account can see.
-    This ignores mimeType so we can debug access issues.
-    """
-    results = []
-    page_token = None
-    print(f"\n[DEBUG] Starting to list ALL files in folder_id='{folder_id}', path='{path}'")
 
-    while True:
-        try:
-            response = drive_service.files().list(
-                q=f"'{folder_id}' in parents and trashed=false",
-                spaces='drive',
-                fields='nextPageToken, files(id, name, mimeType, webViewLink)',
-                pageToken=page_token,
-                includeItemsFromAllDrives=True,
-                supportsAllDrives=True
-            ).execute()
-        except Exception as e:
-            print(f"[ERROR] Google Drive API call failed: {e}")
-            break
-
-        files = response.get('files', [])
-        if not files:
-            print(f"[DEBUG] No files returned from folder_id='{folder_id}'")
-        for f in files:
-            print(f"[DEBUG] Found file: id={f['id']}, name='{f['name']}', mimeType={f['mimeType']}, webViewLink={f.get('webViewLink','')}")
-            results.append(f)
-
-        page_token = response.get('nextPageToken', None)
-        if not page_token:
-            break
-
-    print(f"[DEBUG] Finished listing folder_id='{folder_id}', total files found: {len(results)}\n")
-    return results
     
 @app.get("/search")
 async def search_pdfs(
@@ -1241,7 +1233,7 @@ async def search_pdfs(
     if not pdf_listing_done:
         print("[INFO] Fetching PDF list from Google Drive for the first time...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
-        debug_list_files(DEMO_FOLDER_ID)
+        
         pdf_listing_done = True
     missing_vectorstores = []
     
