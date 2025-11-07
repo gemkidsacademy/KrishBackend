@@ -152,6 +152,7 @@ Base = declarative_base()
 
 cached_vectorstores = TTLCache(maxsize=20, ttl=3600)
 pdf_listing_done = False
+all_pdfs = []
 class UserListItem(BaseModel):
     id: int
     name: str
@@ -1177,7 +1178,7 @@ async def search_pdfs(
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
     
-    global user_vectorstores_initialized,pdf_listing_done
+    global user_vectorstores_initialized,pdf_listing_done,all_pdfs
     if user_id not in user_contexts:
         user_contexts[user_id] = []
         print(f"[DEBUG] Created new context for user: {user_id}")
