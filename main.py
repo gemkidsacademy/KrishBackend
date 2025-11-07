@@ -779,11 +779,13 @@ def list_pdfs(folder_id, path=""):
     while True:
         try:
             response = drive_service.files().list(
-                q=f"'{folder_id}' in parents and trashed=false",
-                spaces='drive',
-                fields='nextPageToken, files(id, name, mimeType, webViewLink)',
-                pageToken=page_token
-            ).execute()
+            q=f"'{folder_id}' in parents and trashed=false",
+            spaces='drive',
+            fields='nextPageToken, files(id, name, mimeType, webViewLink)',
+            pageToken=page_token,
+            includeItemsFromAllDrives=True,   # <-- ADD THIS
+            supportsAllDrives=True             # <-- AND THIS
+        ).execute()
         except Exception as e:
             print(f"[ERROR] Failed to list files in folder_id='{folder_id}': {e}")
             return results
