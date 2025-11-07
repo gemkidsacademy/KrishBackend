@@ -151,6 +151,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 cached_vectorstores = TTLCache(maxsize=20, ttl=3600)
+pdf_listing_done = False
 class UserListItem(BaseModel):
     id: int
     name: str
@@ -1175,15 +1176,18 @@ async def search_pdfs(
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
-
-    global user_vectorstores_initialized
+    
+    global user_vectorstores_initialized,pdf_listing_done
     if user_id not in user_contexts:
         user_contexts[user_id] = []
         print(f"[DEBUG] Created new context for user: {user_id}")
 
     # ------------------ Initialize vector stores ------------------
     # ------------------ Ensure vector stores exist ------------------
-    all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+    if not pdf_listing_done:
+        print("[INFO] Fetching PDF list from Google Drive for the first time...")
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        pdf_listing_done = True
     missing_vectorstores = []
     
     for pdf in all_pdfs:
