@@ -114,11 +114,12 @@ drive_service = build("drive", "v3", credentials=creds)
 DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
 try:
     response = drive_service.files().list(
-        q=f"'{DEMO_FOLDER_ID' in parents and trashed=false",
-        fields="files(id, name, mimeType)",
-        includeItemsFromAllDrives=True,
-        supportsAllDrives=True
-    ).execute()
+    q=f"'{DEMO_FOLDER_ID}' in parents and trashed=false",
+    spaces='drive',
+    fields='nextPageToken, files(id, name, mimeType, webViewLink)',
+    includeItemsFromAllDrives=True,
+    supportsAllDrives=True
+).execute()
 
     files = response.get("files", [])
     print(f"Total files visible to service account: {len(files)}")
