@@ -111,35 +111,21 @@ drive_service = build("drive", "v3", credentials=creds)
 
 
 #DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
-DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
-
 try:
     response = drive_service.files().list(
-        q=f"'{DEMO_FOLDER_ID}' in parents and trashed=false",
-        spaces='drive',
-        fields='nextPageToken, files(id, name, mimeType, webViewLink)',
+        q=f"'{FOLDER_ID}' in parents and trashed=false",
+        fields="files(id, name, mimeType)",
         includeItemsFromAllDrives=True,
         supportsAllDrives=True
     ).execute()
 
-    files = response.get('files', [])
-    print(f"[INFO] Total files found in folder {DEMO_FOLDER_ID}: {len(files)}")
-
-    if not files:
-        print("[WARNING] No files were returned. Possible causes:")
-        print("  - Folder ID is incorrect")
-        print("  - Service account lacks permission")
-        print("  - Folder is empty or files are not accessible")
-
+    files = response.get("files", [])
+    print(f"Total files visible to service account: {len(files)}")
     for f in files:
-        file_id = f.get('id', '<missing_id>')
-        file_name = f.get('name', '<missing_name>')
-        mime_type = f.get('mimeType', '<missing_mimeType>')
-        web_view_link = f.get('webViewLink', '<no_link>')
-        print(f"[FILE] ID: {file_id}, Name: {file_name}, MimeType: {mime_type}, Link: {web_view_link}")
+        print(f"ID: {f['id']}, Name: {f['name']}, MimeType: {f['mimeType']}")
 
 except Exception as e:
-    print(f"[ERROR] Failed to list files in folder {DEMO_FOLDER_ID}: {e}")
+    print(f"[ERROR] Could not access folder: {e}")
 
 
 
