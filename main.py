@@ -1180,7 +1180,45 @@ def get_vectorstore_from_cache(gcs_prefix: str, embeddings):
         print(f"[CACHE HIT] Using cached vectorstore: {gcs_prefix}")
         vectorstore = cached_vectorstores[gcs_prefix]
 
-    return vectorstore    
+    return vectorstore  
+
+def debug_list_files(folder_id, path=""):
+    """
+    Recursively list all files/folders the service account can see.
+    This ignores mimeType so we can debug access issues.
+    """
+    results = []
+    page_token = None
+    print(f"\n[DEBUG] Starting to list ALL files in folder_id='{folder_id}', path='{path}'")
+
+    while True:
+        try:
+            response = drive_service.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                spaces='drive',
+                fields='nextPageToken, files(id, name, mimeType, webViewLink)',
+                pageToken=page_token,
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True
+            ).execute()
+        except Exception as e:
+            print(f"[ERROR] Google Drive API call failed: {e}")
+            break
+
+        files = response.get('files', [])
+        if not files:
+            print(f"[DEBUG] No files returned from folder_id='{folder_id}'")
+        for f in files:
+            print(f"[DEBUG] Found file: id={f['id']}, name='{f['name']}', mimeType={f['mimeType']}, webViewLink={f.get('webViewLink','')}")
+            results.append(f)
+
+        page_token = response.get('nextPageToken', None)
+        if not page_token:
+            break
+
+    print(f"[DEBUG] Finished listing folder_id='{folder_id}', total files found: {len(results)}\n")
+    return results
+    
 @app.get("/search")
 async def search_pdfs(
     query: str = Query(..., min_length=1),
@@ -1201,6 +1239,7 @@ async def search_pdfs(
     if not pdf_listing_done:
         print("[INFO] Fetching PDF list from Google Drive for the first time...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        debug_list_files(DEMO_FOLDER_ID)
         pdf_listing_done = True
     missing_vectorstores = []
     
