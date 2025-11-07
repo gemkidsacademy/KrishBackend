@@ -1291,20 +1291,23 @@ async def search_pdfs(
     if use_context_only or not top_chunks:
         print("[INFO] GPT will rely on context or external knowledge ONLY")
         gpt_prompt = f"""
-You are an assistant. Follow the instructions below carefully.
-
-Style: {reasoning_instruction}
-
-Use only the previous conversation context to answer:
-{context_gist}
-
-Question:
-{query}
-
-Guidelines:
-- Do not use any external knowledge beyond the conversation.
-- Prepend "[GPT answer]" if relying on your own understanding.
-"""
+        You are an assistant. Follow the instructions below carefully.
+        
+        Style: {reasoning_instruction}
+        
+        Use only the previous conversation context to answer:
+        {context_gist}
+        
+        Question:
+        {query}
+        
+        Guidelines:
+        - Do not use any external knowledge beyond the conversation.
+        - If the user asks for a resource (e.g., "booklet", "PDF", "worksheet") that is mentioned 
+          in the context but not actually provided, clearly say you do not have access to it, 
+          rather than implying that you know its contents.
+        - Prepend "[GPT answer]" if relying on your own understanding.
+        """
     else:
         print("[INFO] GPT will use PDF chunks + context")
         gpt_prompt = f"""
