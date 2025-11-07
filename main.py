@@ -1226,7 +1226,7 @@ async def search_pdfs(
     # -------------------- Step 1: Retrieve PDFs --------------------
     pdf_files = []
     if query_type in ("pdf_only", "mixed") and class_name:
-        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        
         
         # Split class_name into a list of folder names, trimming whitespace
         class_names = [cn.strip().lower() for cn in class_name.split(",")]
