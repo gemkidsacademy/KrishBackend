@@ -3,6 +3,7 @@ import time
 from dotenv import load_dotenv
 from typing import Optional, List
 import pandas as pd
+from cachetools import TTLCache
 
 
 
@@ -149,6 +150,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+cached_vectorstores = TTLCache(maxsize=20, ttl=3600)
 class UserListItem(BaseModel):
     id: int
     name: str
@@ -1152,7 +1154,18 @@ def gcs_vectorstore_exists(prefix: str) -> bool:
     print(f"[DEBUG] Checking GCS vectorstore existence for prefix: '{prefix}', found {len(blobs)} files")
     return len(blobs) > 0
 
+def get_vectorstore_from_cache(gcs_prefix: str, embeddings):
+    global cached_vectorstores
 
+    if gcs_prefix not in cached_vectorstores:
+        print(f"[CACHE MISS] Loading vectorstore from GCS: {gcs_prefix}")
+        vectorstore = load_vectorstore_from_gcs(gcs_prefix, embeddings)
+        cached_vectorstores[gcs_prefix] = vectorstore
+    else:
+        print(f"[CACHE HIT] Using cached vectorstore: {gcs_prefix}")
+        vectorstore = cached_vectorstores[gcs_prefix]
+
+    return vectorstore    
 @app.get("/search")
 async def search_pdfs(
     query: str = Query(..., min_length=1),
@@ -1245,7 +1258,16 @@ async def search_pdfs(
             print(f"[DEBUG] Loading vectorstore from GCS for PDF: {pdf_name}, prefix: {gcs_prefix}")
 
             try:
-                vectorstore: FAISS = load_vectorstore_from_gcs(gcs_prefix, embeddings)
+                cache_key = gcs_prefix  # or something like f"{user_id}:{pdf_base_name}"
+
+                if cache_key not in cached_vectorstores:
+                    print(f"[INFO] Loading vectorstore from GCS: {gcs_prefix}")
+                    vectorstore = get_vectorstore_from_cache(gcs_prefix, embeddings)
+                    cached_vectorstores[cache_key] = vectorstore
+                else:
+                    vectorstore = cached_vectorstores[cache_key]
+                    print(f"[INFO] Using cached vectorstore: {gcs_prefix}")
+
                 print(f"[DEBUG] Vectorstore loaded for PDF: {pdf_name}")
             except Exception as e:
                 print(f"[ERROR] Failed to load vectorstore for {pdf_name}: {e}")
