@@ -769,7 +769,7 @@ def list_pdfs(folder_id, path=""):
     """
     Recursively list PDFs from Google Drive and track folder path.
     Returns a list of dicts with 'id', 'name', 'webViewLink', and 'path'.
-    Includes detailed debug print statements.
+    Includes detailed debug print statements to find root cause of empty results.
     """
     results = []
     page_token = None
@@ -777,21 +777,34 @@ def list_pdfs(folder_id, path=""):
     print(f"DEBUG: Starting to list files in folder_id='{folder_id}' with path='{path}'")
 
     while True:
-        response = drive_service.files().list(
-            q=f"'{folder_id}' in parents and trashed=false",
-            spaces='drive',
-            fields='nextPageToken, files(id, name, mimeType, webViewLink)',
-            pageToken=page_token
-        ).execute()
+        try:
+            response = drive_service.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                spaces='drive',
+                fields='nextPageToken, files(id, name, mimeType, webViewLink)',
+                pageToken=page_token
+            ).execute()
+        except Exception as e:
+            print(f"[ERROR] Failed to list files in folder_id='{folder_id}': {e}")
+            return results
 
         files = response.get('files', [])
         print(f"DEBUG: Retrieved {len(files)} files from folder_id='{folder_id}'")
 
+        if len(files) == 0:
+            print(f"[WARNING] No files found in folder_id='{folder_id}'. Possible causes:")
+            print("  - Folder ID might be wrong")
+            print("  - Service account / credentials lack permission")
+            print("  - Folder is empty")
+            print("  - Files are not accessible or trashed")
+
         for file in files:
-            file_id = file['id']
-            file_name = file['name']
-            mime_type = file['mimeType']
+            file_id = file.get('id', '<missing_id>')
+            file_name = file.get('name', '<missing_name>')
+            mime_type = file.get('mimeType', '<missing_mime>')
             web_view_link = file.get('webViewLink', '')
+
+            print(f"DEBUG: Inspecting file -> id: {file_id}, name: '{file_name}', mimeType: '{mime_type}'")
 
             if mime_type == 'application/pdf':
                 pdf_path = f"{path}/{file_name}".lstrip("/")
@@ -801,18 +814,17 @@ def list_pdfs(folder_id, path=""):
                     "webViewLink": web_view_link,
                     "path": pdf_path
                 })
-                print(f"DEBUG: Found PDF -> id: {file_id}, name: '{file_name}', path: '{pdf_path}'")
+                print(f"[FOUND PDF] id: {file_id}, name: '{file_name}', path: '{pdf_path}'")
 
             elif mime_type == 'application/vnd.google-apps.folder':
                 folder_path = f"{path}/{file_name}".lstrip("/")
-                print(f"DEBUG: Found folder -> id: {file_id}, name: '{file_name}', path: '{folder_path}'")
-                # Recursively list PDFs inside this folder
+                print(f"[FOUND FOLDER] id: {file_id}, name: '{file_name}', path: '{folder_path}'")
                 nested_results = list_pdfs(file_id, folder_path)
                 results.extend(nested_results)
-                print(f"DEBUG: Completed folder '{folder_path}', found {len(nested_results)} PDFs inside")
+                print(f"[COMPLETED FOLDER] '{folder_path}', found {len(nested_results)} PDFs inside")
 
             else:
-                print(f"DEBUG: Skipping file -> id: {file_id}, name: '{file_name}', mimeType: '{mime_type}'")
+                print(f"[SKIPPED] id: {file_id}, name: '{file_name}', mimeType: '{mime_type}'")
 
         page_token = response.get('nextPageToken', None)
         if page_token:
@@ -825,6 +837,7 @@ def list_pdfs(folder_id, path=""):
 
     print(f"DEBUG: Finished listing folder_id='{folder_id}', total PDFs found so far: {len(results)}")
     return results
+
 
 
     
