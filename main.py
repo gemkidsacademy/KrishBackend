@@ -1263,7 +1263,8 @@ async def search_pdfs(
             print(f"[DEBUG] Loading vectorstore from GCS for PDF: {pdf_name}, prefix: {gcs_prefix}")
 
             try:
-                cache_key = gcs_prefix  # or something like f"{user_id}:{pdf_base_name}"
+                cache_key = f"{user_id}:{os.path.dirname(pdf['path'])}:{pdf_base_name}"
+                  # or something like f"{user_id}:{pdf_base_name}"
 
                 if cache_key not in cached_vectorstores:
                     print(f"[INFO] Loading vectorstore from GCS: {gcs_prefix}")
