@@ -110,24 +110,9 @@ creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPE
 drive_service = build("drive", "v3", credentials=creds)
 
 
-#DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
-DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
-try:
-    response = drive_service.files().list(
-    q=f"'{DEMO_FOLDER_ID}' in parents and trashed=false",
-    spaces='drive',
-    fields='nextPageToken, files(id, name, mimeType, webViewLink)',
-    includeItemsFromAllDrives=True,
-    supportsAllDrives=True
-).execute()
+DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
+#DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
 
-    files = response.get("files", [])
-    print(f"Total files visible to service account: {len(files)}")
-    for f in files:
-        print(f"ID: {f['id']}, Name: {f['name']}, MimeType: {f['mimeType']}")
-
-except Exception as e:
-    print(f"[ERROR] Could not access folder: {e}")
 
 
 
