@@ -196,6 +196,9 @@ class AddUserRequest(BaseModel):
     phone_number: str
     class_name: str 
 
+class KnowledgeBaseRequest(BaseModel):
+    knowledge_base: str
+
 class EditUserRequest(BaseModel):
     name: str
     email: str
