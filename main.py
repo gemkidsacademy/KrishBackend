@@ -205,9 +205,8 @@ class EditUserRequest(BaseModel):
     
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_base"
-
-    # single-row table, no name column
-    content = Column(Text, nullable=True)  # can start empty
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    content = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class KnowledgeBaseUpdate(BaseModel):
