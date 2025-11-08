@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from typing import Optional, List
 import pandas as pd
 from cachetools import TTLCache
-
+import re 
 
 
 #Twilio API
@@ -1330,27 +1330,47 @@ async def search_pdfs(
     
     # -------------------- Step 1b: Check query intent with OpenAI --------------------
     # -------------------- Step 1b: Handle PDF link requests --------------------
+    
     pdf_urls_to_send = []
-
+    
     if pdf_files and is_pdf_request(query):
         query_lower = query.lower()
+        print(f"[DEBUG] Query received: {query_lower}")
+        print(f"[DEBUG] Total PDFs available: {len(pdf_files)}")
     
-        # Step 1: Filter PDFs by folder names dynamically
+        # Step 1: Filter PDFs by term/week using regex
         filtered_pdfs = []
+        term_match = re.search(r"term\s*(\d+)", query_lower)
+        week_match = re.search(r"week\s*(\d+)", query_lower)
+        
+        query_term = term_match.group(1) if term_match else None
+        query_week = week_match.group(1) if week_match else None
+        
+        print(f"[DEBUG] Extracted from query -> term: {query_term}, week: {query_week}")
+    
         for pdf in pdf_files:
             path_lower = pdf["path"].lower()
-            # Include PDF if any folder in path matches a word in the query
-            if any(folder.lower() in query_lower for folder in path_lower.split("/")):
+            name_lower = pdf["name"].lower()
+            
+            # Extract T/W codes from PDF name
+            term_pdf = re.search(r"t(\d+)", name_lower)
+            week_pdf = re.search(r"w(\d+)", name_lower)
+            
+            term_pdf_val = term_pdf.group(1) if term_pdf else None
+            week_pdf_val = week_pdf.group(1) if week_pdf else None
+    
+            print(f"[DEBUG] Checking PDF: {pdf['name']} -> term: {term_pdf_val}, week: {week_pdf_val}")
+    
+            term_match_ok = (query_term is None or term_pdf_val == query_term)
+            week_match_ok = (query_week is None or week_pdf_val == query_week)
+    
+            if term_match_ok and week_match_ok:
                 filtered_pdfs.append(pdf)
+                print(f"[DEBUG] PDF matched filter: {pdf['name']}")
     
-        # Step 2: Further filter by week if mentioned
-        if "week" in query_lower:
-            filtered_pdfs = [
-                pdf for pdf in filtered_pdfs
-                if any(f"week {i}" in pdf["path"].lower() for i in range(1, 10) if f"week {i}" in query_lower)
-            ]
+        print(f"[DEBUG] PDFs after filtering: {[pdf['name'] for pdf in filtered_pdfs]}")
     
-        # Step 3: Generate URLs
+        # Step 2: Generate URLs
         pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
         print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
     
