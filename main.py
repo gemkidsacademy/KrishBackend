@@ -1247,6 +1247,27 @@ def is_pdf_request(query: str) -> bool:
 def generate_drive_pdf_url(file_id: str) -> str:
         return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
 
+def is_educational_query_openai(query: str) -> bool:
+    """
+    Returns True if OpenAI classifies the query as educational, False otherwise.
+    """
+    prompt = (
+        "Determine if the following query is educational, i.e., related to school subjects, "
+        "lessons, exercises, assignments, quizzes, or academic content. Respond ONLY with Yes or No.\n\n"
+        f"Query: \"{query}\""
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that classifies queries as educational or not."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0
+    )
+
+    answer = response.choices[0].message.content.strip().lower()
+    return answer.startswith("yes")
 
     
 @app.get("/search")
@@ -1258,6 +1279,17 @@ async def search_pdfs(
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
+
+     # ------------------ Step 0: Check if query is educational ------------------
+    if not is_educational_query_openai(query):
+        print(f"[WARN] Query not educational: {query}")
+        # Return an empty result or a friendly message
+        results = [{
+            "name": "**No results**",
+            "snippet": "Your query does not seem to be educational or relevant.",
+            "links": []
+        }]
+        return JSONResponse(results)
     
     global user_vectorstores_initialized,pdf_listing_done,all_pdfs
     if user_id not in user_contexts:
