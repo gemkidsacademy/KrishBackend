@@ -329,6 +329,7 @@ def get_all_users(db: Session = Depends(get_db)):
     return users
 
 # --- Guest Chatbot endpoint ---
+"""
 @app.get("/guest-chatbot")
 async def guest_chatbot(
     query: str = Query(..., min_length=1),
@@ -418,7 +419,7 @@ async def guest_chatbot(
         import traceback
         traceback.print_exc()
         return {"error": "Internal server error", "details": str(e)}
-
+"""
 
 @app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
 def update_knowledge_base(
