@@ -1218,6 +1218,39 @@ def get_vectorstore_from_cache(gcs_prefix: str, embeddings):
 
     return vectorstore  
 
+def is_pdf_request(query: str) -> bool:
+    """
+    Ask the model whether the user wants PDF links.
+    Returns True if the model answers "YES" (case-insensitive), otherwise False.
+    Sends a strict system instruction and user query as separate messages to avoid parsing issues.
+    """
+    system_instr = "You are a strict intent classifier. Answer only with YES or NO."
+    user_content = (
+        f"Is the following user query asking to fetch PDF files or PDF links? "
+        f"Reply YES or NO.\n\nQuery: {query}"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_instr},
+                {"role": "user", "content": user_content}
+            ],
+            temperature=0
+        )
+
+        # Defensive parsing: take first choice, collapse whitespace, uppercase
+        raw = resp.choices[0].message.content.strip().upper()
+        print(f"[DEBUG] OpenAI pdf intent detection response: '{raw}'")
+
+        # Accept "YES" even if extra whitespace/newlines
+        return raw.startswith("YES")
+
+    except Exception as e:
+        print(f"[ERROR] is_pdf_request failed: {e}")
+        # fallback: treat as NOT a PDF request to avoid false positives
+        return False
 
     
 @app.get("/search")
@@ -1297,6 +1330,33 @@ async def search_pdfs(
         if not pdf_files:
             print(f"[WARNING] No PDFs found for '{class_name}'. GPT will fallback to context-only or external knowledge")
             use_context_only = True
+
+    
+    # -------------------- Step 1b: Check query intent with OpenAI --------------------
+    # -------------------- Step 1b: Handle PDF link requests --------------------
+pdf_urls_to_send = []
+
+if pdf_files and is_pdf_request(query):
+    # Collect all relevant PDF URLs
+    pdf_urls_to_send = [pdf["url"] for pdf in pdf_files]
+    print(f"[DEBUG] OpenAI confirmed PDF request. URLs to send: {pdf_urls_to_send}")
+
+    # Prepare response
+    source_name = "Academy Answer"
+    answer_text = "Here are the PDFs you requested." if pdf_urls_to_send else "No PDFs found."
+
+    results.append({
+        "name": f"**{source_name}**",
+        "snippet": answer_text,
+        "links": pdf_urls_to_send
+    })
+
+    # Update user context
+    append_to_user_context(user_id, "user", query)
+    append_to_user_context(user_id, "assistant", answer_text)
+
+    print("==================== SEARCH REQUEST END ====================\n")
+    return JSONResponse(results)
 
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
