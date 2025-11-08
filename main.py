@@ -1331,7 +1331,7 @@ async def search_pdfs(
     # -------------------- Step 1b: Check query intent with OpenAI --------------------
     # -------------------- Step 1b: Handle PDF link requests --------------------
     pdf_urls_to_send = []
-    
+
     if pdf_files and is_pdf_request(query):
         query_lower = query.lower()
         print(f"[DEBUG] Query received: {query_lower}")
@@ -1344,22 +1344,19 @@ async def search_pdfs(
         query_week = week_match.group(1) if week_match else None
         print(f"[DEBUG] Extracted from query -> term: {query_term}, week: {query_week}")
     
-        # Filter PDFs based on term/week
+        # Filter PDFs
         filtered_pdfs = []
         for pdf in pdf_files:
             name_lower = pdf["name"].lower()
-            path_lower = pdf["path"].lower()
     
-            # Extract term/week from PDF filename
-            term_pdf_match = re.search(r"t(\d+)", name_lower)
-            week_pdf_match = re.search(r"w(\d+)", name_lower)
-            term_pdf_val = term_pdf_match.group(1) if term_pdf_match else None
-            week_pdf_val = week_pdf_match.group(1) if week_pdf_match else None
+            # Extract all T/W codes from PDF filename (handle multiple matches)
+            term_matches = re.findall(r"t(\d+)", name_lower)
+            week_matches = re.findall(r"w(\d+)", name_lower)
     
-            print(f"[DEBUG] Checking PDF: {pdf['name']} -> term: {term_pdf_val}, week: {week_pdf_val}")
+            print(f"[DEBUG] Checking PDF: {pdf['name']} -> terms: {term_matches}, weeks: {week_matches}")
     
-            term_match_ok = (query_term is None or term_pdf_val == query_term)
-            week_match_ok = (query_week is None or week_pdf_val == query_week)
+            term_match_ok = (query_term is None or query_term in term_matches)
+            week_match_ok = (query_week is None or query_week in week_matches)
     
             if term_match_ok and week_match_ok:
                 filtered_pdfs.append(pdf)
@@ -1367,7 +1364,7 @@ async def search_pdfs(
     
         print(f"[DEBUG] PDFs after filtering: {[pdf['name'] for pdf in filtered_pdfs]}")
     
-        # Generate URLs for matched PDFs
+        # Generate URLs
         pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
         print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
     
