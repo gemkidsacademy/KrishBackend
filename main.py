@@ -1349,11 +1349,11 @@ async def search_pdfs(
         for pdf in pdf_files:
             name_lower = pdf["name"].lower()
     
-            # Extract all T/W codes from PDF filename (handle multiple matches)
-            term_matches = re.findall(r"t(\d+)", name_lower)
-            week_matches = re.findall(r"w(\d+)", name_lower)
+            # Robust regex for term/week (handles commas and spaces)
+            term_matches = re.findall(r"t\s*(\d+)", name_lower)
+            week_matches = re.findall(r"w\s*(\d+)", name_lower)
     
-            print(f"[DEBUG] Checking PDF: {pdf['name']} -> terms: {term_matches}, weeks: {week_matches}")
+            print(f"[DEBUG] Checking PDF: {pdf['name']} -> term_matches: {term_matches}, week_matches: {week_matches}")
     
             term_match_ok = (query_term is None or query_term in term_matches)
             week_match_ok = (query_week is None or query_week in week_matches)
@@ -1364,7 +1364,7 @@ async def search_pdfs(
     
         print(f"[DEBUG] PDFs after filtering: {[pdf['name'] for pdf in filtered_pdfs]}")
     
-        # Generate URLs and append to results
+        # Generate URLs
         pdf_urls_to_send += [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
         print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
     
@@ -1384,7 +1384,6 @@ async def search_pdfs(
     
         print("==================== SEARCH REQUEST END ====================\n")
         return JSONResponse(results)
-
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
