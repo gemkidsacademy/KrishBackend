@@ -1244,6 +1244,10 @@ def is_pdf_request(query: str) -> bool:
         # fallback: treat as not a PDF request
         return False
 
+def generate_drive_pdf_download_url(file_id: str) -> str:
+    return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+
 
     
 @app.get("/search")
@@ -1330,8 +1334,9 @@ async def search_pdfs(
     pdf_urls_to_send = []
     
     if pdf_files and is_pdf_request(query):
+    
         # Collect all relevant PDF URLs
-        pdf_urls_to_send = [pdf["url"] for pdf in pdf_files]
+        pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in pdf_files]
         print(f"[DEBUG] OpenAI confirmed PDF request. URLs to send: {pdf_urls_to_send}")
     
         # Prepare response
@@ -1350,7 +1355,6 @@ async def search_pdfs(
     
         print("==================== SEARCH REQUEST END ====================\n")
         return JSONResponse(results)
-
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
