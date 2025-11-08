@@ -331,26 +331,49 @@ async def guest_chatbot(
     query: str = Query(..., min_length=1),
     db: Session = Depends(get_db)
 ):
+    print("\n==================== GUEST CHATBOT REQUEST START ====================")
+    print(f"[INFO] Incoming query: {query}")
+
     try:
         # Step 1: Load knowledge base from DB
+        print("[STEP 1] Fetching documents from knowledge_base table...")
         docs_in_db = db.execute("SELECT content FROM knowledge_base").mappings().all()
+        print(f"[DEBUG] Number of documents fetched: {len(docs_in_db)}")
+
         docs = [Document(page_content=row["content"]) for row in docs_in_db]
 
         if not docs:
+            print("[WARN] Knowledge base is empty.")
             return {"snippet": "Knowledge base is empty."}
 
         # Step 2: Create vector store in memory
+        print("[STEP 2] Creating FAISS vector store with OpenAI embeddings...")
         embeddings = OpenAIEmbeddings()
-        vectorstore = FAISS.from_documents(docs, embeddings)
+        try:
+            vectorstore = FAISS.from_documents(docs, embeddings)
+            print("[DEBUG] FAISS vector store created successfully.")
+        except Exception as e:
+            print("[ERROR] Failed to create FAISS vector store:", e)
+            return {"error": "Vector store creation failed", "details": str(e)}
 
         # Step 3: Retrieve top 3 relevant documents
-        docs_and_scores = vectorstore.similarity_search_with_score(query, k=3)
+        print(f"[STEP 3] Performing similarity search for query: '{query}'")
+        try:
+            docs_and_scores = vectorstore.similarity_search_with_score(query, k=3)
+            print(f"[DEBUG] Found {len(docs_and_scores)} relevant documents.")
+        except Exception as e:
+            print("[ERROR] Similarity search failed:", e)
+            return {"error": "Similarity search failed", "details": str(e)}
+
         if not docs_and_scores:
+            print("[WARN] No relevant content found for query.")
             return {"snippet": "No relevant content found."}
 
         combined_snippet = "\n\n".join([doc.page_content for doc, _ in docs_and_scores])
+        print(f"[DEBUG] Combined snippet length: {len(combined_snippet)} characters")
 
-        # Step 4: OpenAI API call using retrieved context
+        # Step 4: Call OpenAI with retrieved context
+        print("[STEP 4] Sending request to OpenAI API...")
         prompt = f"""
         You are an educational assistant.
 
@@ -360,17 +383,32 @@ async def guest_chatbot(
         Answer the user query concisely and clearly:
         '{query}'
         """
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2
-        )
-        gpt_answer = response.choices[0].message.content
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2
+            )
+            print("[DEBUG] OpenAI API call succeeded.")
+        except Exception as e:
+            print("[ERROR] OpenAI API call failed:", e)
+            return {"error": "OpenAI API request failed", "details": str(e)}
+
+        gpt_answer = response.choices[0].message.content if response.choices else None
+        if not gpt_answer:
+            print("[WARN] No answer returned from OpenAI response.")
+            return {"snippet": "No answer generated."}
+
+        print(f"[INFO] Final GPT answer length: {len(gpt_answer)} characters")
+        print("==================== GUEST CHATBOT REQUEST END ====================\n")
 
         # Step 5: Return response to frontend
         return {"snippet": gpt_answer}
 
     except Exception as e:
+        print("[FATAL ERROR] Unexpected failure in guest_chatbot route:", e)
+        import traceback
+        traceback.print_exc()
         return {"error": "Internal server error", "details": str(e)}
 
 @app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
