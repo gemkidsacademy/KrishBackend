@@ -1364,8 +1364,8 @@ async def search_pdfs(
     
         print(f"[DEBUG] PDFs after filtering: {[pdf['name'] for pdf in filtered_pdfs]}")
     
-        # Generate URLs
-        pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
+        # Generate URLs and append to results
+        pdf_urls_to_send += [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
         print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
     
         # Prepare response
