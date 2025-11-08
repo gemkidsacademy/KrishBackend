@@ -60,6 +60,7 @@ from rapidfuzz import fuzz
 #global dictionary gpt maintains context in the conversation
 user_contexts: dict[str, list[dict[str, str]]] = {}
 MAX_INTERACTIONS = 2
+interaction=0
 #for creating user passwords
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -1278,16 +1279,26 @@ async def search_pdfs(
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
-    global user_contexts
-
+    
     # ------------------ Step 0: Check interaction limit ------------------
+    # Ensure the global user_contexts dictionary exists for the user
+    global user_contexts
+    
+    # Initialize context for new users to avoid KeyError
+    user_contexts.setdefault(user_id, [])
+    
     # Each interaction counts as a pair (user + assistant)
     interaction_count = len(user_contexts[user_id]) // 2
+    
+    # Enforce maximum interaction limit
     if interaction_count >= MAX_INTERACTIONS:
         print(f"[WARN] User {user_id} exceeded max interactions ({MAX_INTERACTIONS})")
         results = [{
             "name": "**Academy Answer**",
-            "snippet": f"You have reached the maximum of {MAX_INTERACTIONS} interactions. Please contact support for further queries.",
+            "snippet": (
+                f"You have reached the maximum of {MAX_INTERACTIONS} interactions. "
+                "Please contact support for further queries."
+            ),
             "links": []
         }]
         return JSONResponse(results)
