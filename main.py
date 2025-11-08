@@ -1278,6 +1278,7 @@ async def search_pdfs(
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
+    global user_contexts
 
     # ------------------ Step 0: Check interaction limit ------------------
     # Each interaction counts as a pair (user + assistant)
