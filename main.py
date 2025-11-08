@@ -1244,9 +1244,8 @@ def is_pdf_request(query: str) -> bool:
         # fallback: treat as not a PDF request
         return False
 
-def generate_drive_pdf_download_url(file_id: str) -> str:
-    return f"https://drive.google.com/uc?export=download&id={file_id}"
-
+def generate_drive_pdf_url(file_id: str) -> str:
+        return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
 
 
     
