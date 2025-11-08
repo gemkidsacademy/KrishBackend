@@ -325,6 +325,54 @@ def get_all_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
     return users
 
+# --- Guest Chatbot endpoint ---
+@app.get("/guest-chatbot")
+async def guest_chatbot(
+    query: str = Query(..., min_length=1),
+    db: Session = Depends(get_db)
+):
+    try:
+        # Step 1: Load knowledge base from DB
+        docs_in_db = db.execute("SELECT content FROM knowledge_base").mappings().all()
+        docs = [Document(page_content=row["content"]) for row in docs_in_db]
+
+        if not docs:
+            return {"snippet": "Knowledge base is empty."}
+
+        # Step 2: Create vector store in memory
+        embeddings = OpenAIEmbeddings()
+        vectorstore = FAISS.from_documents(docs, embeddings)
+
+        # Step 3: Retrieve top 3 relevant documents
+        docs_and_scores = vectorstore.similarity_search_with_score(query, k=3)
+        if not docs_and_scores:
+            return {"snippet": "No relevant content found."}
+
+        combined_snippet = "\n\n".join([doc.page_content for doc, _ in docs_and_scores])
+
+        # Step 4: OpenAI API call using retrieved context
+        prompt = f"""
+        You are an educational assistant.
+
+        Based on the following content from the knowledge base:
+        {combined_snippet}
+
+        Answer the user query concisely and clearly:
+        '{query}'
+        """
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        gpt_answer = response.choices[0].message.content
+
+        # Step 5: Return response to frontend
+        return {"snippet": gpt_answer}
+
+    except Exception as e:
+        return {"error": "Internal server error", "details": str(e)}
+
 @app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
 def update_knowledge_base(
     data: KnowledgeBaseRequest,
@@ -875,6 +923,7 @@ def list_pdfs(folder_id, path=""):
 
     print(f"DEBUG: Finished listing folder_id='{folder_id}', total PDFs found so far: {len(results)}")
     return results
+
 
 
 
