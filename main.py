@@ -1331,12 +1331,28 @@ async def search_pdfs(
     # -------------------- Step 1b: Check query intent with OpenAI --------------------
     # -------------------- Step 1b: Handle PDF link requests --------------------
     pdf_urls_to_send = []
-    
+
     if pdf_files and is_pdf_request(query):
+        query_lower = query.lower()
     
-        # Collect all relevant PDF URLs
-        pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in pdf_files]
-        print(f"[DEBUG] OpenAI confirmed PDF request. URLs to send: {pdf_urls_to_send}")
+        # Step 1: Filter PDFs by folder names dynamically
+        filtered_pdfs = []
+        for pdf in pdf_files:
+            path_lower = pdf["path"].lower()
+            # Include PDF if any folder in path matches a word in the query
+            if any(folder.lower() in query_lower for folder in path_lower.split("/")):
+                filtered_pdfs.append(pdf)
+    
+        # Step 2: Further filter by week if mentioned
+        if "week" in query_lower:
+            filtered_pdfs = [
+                pdf for pdf in filtered_pdfs
+                if any(f"week {i}" in pdf["path"].lower() for i in range(1, 10) if f"week {i}" in query_lower)
+            ]
+    
+        # Step 3: Generate URLs
+        pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
+        print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
     
         # Prepare response
         source_name = "Academy Answer"
