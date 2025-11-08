@@ -162,6 +162,10 @@ class UserListItem(BaseModel):
 
     class Config:
         orm_mode = True  # allows SQLAlchemy models to be converted to Pydantic models
+
+class KnowledgeBaseResponse(BaseModel):
+    knowledge_base: str | None
+    updated_at: datetime | None
         
 
 class UserResponse(BaseModel):
@@ -199,6 +203,15 @@ class EditUserRequest(BaseModel):
     class_name: str
     password: Optional[str] = None  # only update if provided
     
+class KnowledgeBase(Base):
+    __tablename__ = "knowledge_base"
+
+    # single-row table, no name column
+    content = Column(Text, nullable=True)  # can start empty
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class KnowledgeBaseUpdate(BaseModel):
+    knowledge_base: str
 
 class User(Base):
     __tablename__ = "users"
@@ -308,6 +321,25 @@ def get_all_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
     return users
 
+@app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
+def update_knowledge_base(
+    data: KnowledgeBaseRequest,
+    db: Session = Depends(get_db)
+):
+    try:
+        kb = db.query(KnowledgeBase).first()
+        if not kb:
+            kb = KnowledgeBase(content=data.knowledge_base)
+            db.add(kb)
+        else:
+            kb.content = data.knowledge_base
+        db.commit()
+        db.refresh(kb)
+        return KnowledgeBaseResponse(knowledge_base=kb.content, updated_at=kb.updated_at)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update knowledge base: {e}")
+    
 # ----------------- GET endpoint -----------------
 # GET user by ID
 @app.get("/users/info/{user_id}", response_model=UserResponse)
