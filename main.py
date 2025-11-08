@@ -5,6 +5,8 @@ from typing import Optional, List
 import pandas as pd
 from cachetools import TTLCache
 import re 
+from langchain_core.documents import Document
+
 
 
 
