@@ -1252,17 +1252,15 @@ def is_educational_query_openai(query: str) -> bool:
     Returns True if OpenAI classifies the query as educational, False otherwise.
     """
     prompt = (
+        "You are a helpful assistant that classifies queries as educational or not.\n\n"
         "Determine if the following query is educational, i.e., related to school subjects, "
         "lessons, exercises, assignments, quizzes, or academic content. Respond ONLY with Yes or No.\n\n"
         f"Query: \"{query}\""
     )
 
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant that classifies queries as educational or not."},
-            {"role": "user", "content": prompt}
-        ],
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
         temperature=0
     )
 
@@ -1285,7 +1283,7 @@ async def search_pdfs(
         print(f"[WARN] Query not educational: {query}")
         # Return an empty result or a friendly message
         results = [{
-            "name": "**No results**",
+            "name": "**Academy Answer**",
             "snippet": "Your query does not seem to be educational or relevant.",
             "links": []
         }]
