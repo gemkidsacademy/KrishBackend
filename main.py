@@ -343,7 +343,6 @@ async def guest_chatbot(
         docs_in_db = db.execute(text("SELECT content FROM knowledge_base")).mappings().all()
 
         print(f"[DEBUG] Number of documents fetched: {len(docs_in_db)}")
-
         docs = [Document(page_content=row["content"]) for row in docs_in_db]
 
         if not docs:
@@ -352,7 +351,11 @@ async def guest_chatbot(
 
         # Step 2: Create vector store in memory
         print("[STEP 2] Creating FAISS vector store with OpenAI embeddings...")
-        embeddings = OpenAIEmbeddings()
+        api_key = os.environ.get("OPENAI_API_KEY_S")  # use your existing key
+        if not api_key:
+            raise ValueError("Missing OPENAI_API_KEY_S environment variable")
+
+        embeddings = OpenAIEmbeddings(api_key=api_key)
         try:
             vectorstore = FAISS.from_documents(docs, embeddings)
             print("[DEBUG] FAISS vector store created successfully.")
@@ -387,6 +390,7 @@ async def guest_chatbot(
         Answer the user query concisely and clearly:
         '{query}'
         """
+
         try:
             response = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -414,6 +418,7 @@ async def guest_chatbot(
         import traceback
         traceback.print_exc()
         return {"error": "Internal server error", "details": str(e)}
+
 
 @app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
 def update_knowledge_base(
