@@ -1220,37 +1220,30 @@ def get_vectorstore_from_cache(gcs_prefix: str, embeddings):
 
 def is_pdf_request(query: str) -> bool:
     """
-    Ask the model whether the user wants PDF links.
-    Returns True if the model answers "YES" (case-insensitive), otherwise False.
-    Sends a strict system instruction and user query as separate messages to avoid parsing issues.
+    Ask OpenAI whether the user wants PDF links.
+    Returns True if the model answers 'YES', False otherwise.
     """
-    system_instr = "You are a strict intent classifier. Answer only with YES or NO."
-    user_content = (
-        f"Is the following user query asking to fetch PDF files or PDF links? "
-        f"Reply YES or NO.\n\nQuery: {query}"
+    # Use a single, properly formatted triple-quoted string
+    prompt = (
+        "You are a strict intent classifier.\n\n"
+        "Determine whether the following user query is asking to fetch PDF files or PDF links.\n"
+        "Respond only with YES or NO (without quotes).\n\n"
+        f"Query: {query}"
     )
 
     try:
-        resp = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_instr},
-                {"role": "user", "content": user_content}
-            ],
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
             temperature=0
         )
-
-        # Defensive parsing: take first choice, collapse whitespace, uppercase
-        raw = resp.choices[0].message.content.strip().upper()
-        print(f"[DEBUG] OpenAI pdf intent detection response: '{raw}'")
-
-        # Accept "YES" even if extra whitespace/newlines
-        return raw.startswith("YES")
-
+        answer = response.choices[0].message.content.strip().upper()
+        return answer.startswith("YES")
     except Exception as e:
         print(f"[ERROR] is_pdf_request failed: {e}")
-        # fallback: treat as NOT a PDF request to avoid false positives
+        # fallback: treat as not a PDF request
         return False
+
 
     
 @app.get("/search")
