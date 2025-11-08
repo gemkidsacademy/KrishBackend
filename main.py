@@ -1334,29 +1334,29 @@ async def search_pdfs(
     
     # -------------------- Step 1b: Check query intent with OpenAI --------------------
     # -------------------- Step 1b: Handle PDF link requests --------------------
-pdf_urls_to_send = []
-
-if pdf_files and is_pdf_request(query):
-    # Collect all relevant PDF URLs
-    pdf_urls_to_send = [pdf["url"] for pdf in pdf_files]
-    print(f"[DEBUG] OpenAI confirmed PDF request. URLs to send: {pdf_urls_to_send}")
-
-    # Prepare response
-    source_name = "Academy Answer"
-    answer_text = "Here are the PDFs you requested." if pdf_urls_to_send else "No PDFs found."
-
-    results.append({
-        "name": f"**{source_name}**",
-        "snippet": answer_text,
-        "links": pdf_urls_to_send
-    })
-
-    # Update user context
-    append_to_user_context(user_id, "user", query)
-    append_to_user_context(user_id, "assistant", answer_text)
-
-    print("==================== SEARCH REQUEST END ====================\n")
-    return JSONResponse(results)
+    pdf_urls_to_send = []
+    
+    if pdf_files and is_pdf_request(query):
+        # Collect all relevant PDF URLs
+        pdf_urls_to_send = [pdf["url"] for pdf in pdf_files]
+        print(f"[DEBUG] OpenAI confirmed PDF request. URLs to send: {pdf_urls_to_send}")
+    
+        # Prepare response
+        source_name = "Academy Answer"
+        answer_text = "Here are the PDFs you requested." if pdf_urls_to_send else "No PDFs found."
+    
+        results.append({
+            "name": f"**{source_name}**",
+            "snippet": answer_text,
+            "links": pdf_urls_to_send
+        })
+    
+        # Update user context
+        append_to_user_context(user_id, "user", query)
+        append_to_user_context(user_id, "assistant", answer_text)
+    
+        print("==================== SEARCH REQUEST END ====================\n")
+        return JSONResponse(results)
 
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
