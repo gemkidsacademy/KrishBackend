@@ -7,6 +7,7 @@ from cachetools import TTLCache
 import re 
 
 
+
 #Twilio API
 from twilio.rest import Client
 # FastAPI & Pydantic
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -337,7 +338,8 @@ async def guest_chatbot(
     try:
         # Step 1: Load knowledge base from DB
         print("[STEP 1] Fetching documents from knowledge_base table...")
-        docs_in_db = db.execute("SELECT content FROM knowledge_base").mappings().all()
+        docs_in_db = db.execute(text("SELECT content FROM knowledge_base")).mappings().all()
+
         print(f"[DEBUG] Number of documents fetched: {len(docs_in_db)}")
 
         docs = [Document(page_content=row["content"]) for row in docs_in_db]
