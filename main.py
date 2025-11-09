@@ -1511,8 +1511,8 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
     # -------------------- Log usage --------------------
     usage = getattr(response, "usage", None)
     if usage:
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
+        prompt_tokens = getattr(usage, "prompt_tokens", 0)
+        completion_tokens = getattr(usage, "completion_tokens", 0)
 
         # Calculate API cost
         call_cost = calculate_openai_cost(
@@ -1535,6 +1535,7 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
         print(f"[INFO] API usage logged in database for user_id={user_id}")
 
     return is_educational
+
     
 
     
