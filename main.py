@@ -1421,10 +1421,11 @@ def is_educational_query_openai(query: str) -> bool:
     
 @app.get("/search")
 async def search_pdfs(
-    query: str = Query(..., min_length=1),
-    reasoning: str = Query("simple", regex="^(simple|medium|advanced)$"),
-    user_id: str = Query(...),
-    class_name: str = Query(None)  # optional, for folder filtering
+    query: str,
+    reasoning: str,
+    user_id: str,
+    class_name: str = None,
+    db: Session = Depends(get_db)  # <-- inject database session
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
