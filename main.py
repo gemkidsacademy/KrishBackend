@@ -1336,7 +1336,7 @@ def classify_query_type(
     query: str, 
     context_gist: str, 
     user_id: str, 
-    db: Session = Depends(get_db)
+    db: Session  # remove Depends
 ) -> str:
     """
     Use GPT to classify if a query is 'context_only', 'pdf_only', or 'mixed'.
@@ -1622,7 +1622,9 @@ async def search_pdfs(
     context_gist = get_context_gist(user_id)
     is_first_query = len(user_contexts[user_id]) == 0
     
-    query_type = classify_query_type(query, context_gist,user_id)
+    # Route
+    query_type = classify_query_type(query, context_gist, user_id, db=db)
+
     
     if is_first_query:
         query_type = "pdf_only"
