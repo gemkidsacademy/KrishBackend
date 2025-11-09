@@ -385,7 +385,8 @@ async def root():
 def get_all_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
     return users
-@app.get("/api/openai-usage", response_model=List[Dict[str, float]])
+    
+@app.get("/api/openai-usage")
 def get_openai_usage(db: Session = Depends(get_db)):
     """
     Returns total OpenAI API usage per user for the last 30 days.
@@ -413,15 +414,19 @@ def get_openai_usage(db: Session = Depends(get_db)):
         # Convert SQLAlchemy results to JSON-friendly format
         result = []
         for record in usage_records:
-            record_dict = {"user": record.user_id, "amount_usd": float(record.total_amount or 0)}
+            record_dict = {
+                "user": record.user_id, 
+                "amount_usd": float(record.total_amount or 0)
+            }
             print(f"[DEBUG] User: {record.user_id}, Total Usage: ${record_dict['amount_usd']:.2f}")
             result.append(record_dict)
 
         print("[DEBUG] Finished preparing usage data response")
-        return result
+        return result  # FastAPI will automatically serialize to JSON
 
     except Exception as e:
         print(f"[ERROR] Failed to fetch usage data: {str(e)}")
+        # Return JSON error instead of default HTML error page
         raise HTTPException(status_code=500, detail=f"Failed to fetch usage data: {str(e)}")
 
         
