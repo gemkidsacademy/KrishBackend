@@ -77,6 +77,10 @@ client = Client(account_sid, auth_token)
 # Temporary in-memory OTP storage
 otp_store = {}
 user_vectorstores_initialized = {} 
+MODEL_COST = {
+    "gpt-4o-mini": {"input": 0.0015, "output": 0.002},  # USD per 1k tokens
+    "text-embedding-3-small": {"input": 0.0004, "output": 0},
+}
 
 # -----------------------------
 # App & CORS
@@ -158,6 +162,17 @@ Base = declarative_base()
 cached_vectorstores = TTLCache(maxsize=20, ttl=3600)
 pdf_listing_done = False
 all_pdfs = []
+
+class OpenAIUsageLog(Base):
+    __tablename__ = "openai_usage_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True)
+    model_name = Column(String)
+    prompt_tokens = Column(Integer)
+    completion_tokens = Column(Integer)
+    cost_usd = Column(Float)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
 class GuestChatbotMessage(BaseModel):
     role: str
@@ -304,6 +319,24 @@ def get_db():
 # Generate OTP
 def generate_otp():
     return random.randint(100000, 999999)
+#log openai api usage
+def log_openai_usage(
+    db: Session,
+    user_id: str,
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_usd: float
+):
+    usage_entry = OpenAIUsageLog(
+        user_id=user_id,
+        model_name=model_name,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost_usd=cost_usd
+    )
+    db.add(usage_entry)
+    db.commit()
 
 # Send OTP SMS
 def send_otp_sms(phone_number: str, otp: int):
@@ -313,6 +346,23 @@ def send_otp_sms(phone_number: str, otp: int):
         to=phone_number
     )
     print(f"Sent OTP {otp} to {phone_number}, SID: {message.sid}")
+
+def calculate_openai_cost(model_name: str, prompt_tokens: int, completion_tokens: int, multiplier: float = 1.0) -> float:
+    """
+    Calculate approximate OpenAI API cost in USD.
+    Multiplier allows for internal adjustments or markups.
+    """
+    model_rates = MODEL_COST.get(model_name)
+    if not model_rates:
+        print(f"[WARN] No cost info for model '{model_name}', defaulting to 0")
+        return 0.0
+
+    cost = (prompt_tokens / 1000) * model_rates["input"] + \
+           (completion_tokens / 1000) * model_rates["output"]
+
+    cost *= multiplier
+    return round(cost, 6)
+    
 # -----------------------------
 # API Endpoints
 
@@ -1660,10 +1710,20 @@ Guidelines:
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
         temperature=0.2
-    )
+    )   
 
+    #generate ai reply
     answer_text = answer_response.choices[0].message.content.strip()
     print("[DEBUG] GPT RAW RESPONSE (first 500 chars):", answer_text[:500])
+
+    #log openai api usage
+    usage = answer_response.usage
+    prompt_tokens = usage.prompt_tokens
+    completion_tokens = usage.completion_tokens    
+    call_cost = calculate_openai_cost(ANSWER_MODEL, prompt_tokens, completion_tokens, multiplier=1.0)
+    print(f"[INFO] OpenAI API cost for this call: ${call_cost}")    
+    # --- Log usage in DB ---
+    log_openai_usage(db, user_id, ANSWER_MODEL, prompt_tokens, completion_tokens, call_cost)
 
     # -------------------- Step 5: Determine Source --------------------
     if answer_text.startswith("[PDF-based answer]"):
