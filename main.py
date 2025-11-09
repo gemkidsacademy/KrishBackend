@@ -332,55 +332,54 @@ def get_all_users(db: Session = Depends(get_db)):
 @app.get("/guest-chatbot")
 async def guest_chatbot(
     query: str = Query(..., min_length=1),
+    context: str = Query("[]"),  # <-- context passed as JSON string from frontend
     db: Session = Depends(get_db)
 ):
+    import json
     print("\n==================== GUEST CHATBOT REQUEST START ====================")
     print(f"[INFO] Incoming query: {query}")
 
     try:
-        # Step 1: Load knowledge base from DB
-        print("[STEP 1] Fetching documents from knowledge_base table...")
-        docs_in_db = db.execute(text("SELECT content FROM knowledge_base")).mappings().all()
+        # Parse the context string into Python list
+        try:
+            context_messages: List[Dict[str, Any]] = json.loads(context)
+            print(f"[INFO] Received context with {len(context_messages)} messages.")
+        except Exception as e:
+            print("[WARN] Failed to parse context:", e)
+            context_messages = []
 
-        print(f"[DEBUG] Number of documents fetched: {len(docs_in_db)}")
+        # Step 1: Load knowledge base
+        docs_in_db = db.execute(text("SELECT content FROM knowledge_base")).mappings().all()
         docs = [Document(page_content=row["content"]) for row in docs_in_db]
 
         if not docs:
-            print("[WARN] Knowledge base is empty.")
             return {"snippet": "Knowledge base is empty."}
 
-        # Step 2: Create vector store in memory
-        print("[STEP 2] Creating FAISS vector store with OpenAI embeddings...")
-        api_key = os.environ.get("OPENAI_API_KEY_S")
-        if not api_key:
-            raise ValueError("Missing OPENAI_API_KEY_S environment variable")
-
-        embeddings = OpenAIEmbeddings(api_key=api_key)
+        # Step 2: Create FAISS vector store
+        embeddings = OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY_S"))
         try:
             vectorstore = FAISS.from_documents(docs, embeddings)
-            print("[DEBUG] FAISS vector store created successfully.")
         except Exception as e:
-            print("[ERROR] Failed to create FAISS vector store:", e)
-            return {"error": "Vector store creation failed", "details": str(e)}
+            print("[ERROR] Vector store creation failed:", e)
+            return {"snippet": "Vector store creation failed."}
 
         # Step 3: Retrieve top 3 relevant documents
-        print(f"[STEP 3] Performing similarity search for query: '{query}'")
         try:
             docs_and_scores = vectorstore.similarity_search_with_score(query, k=3)
-            print(f"[DEBUG] Found {len(docs_and_scores)} relevant documents.")
         except Exception as e:
             print("[ERROR] Similarity search failed:", e)
-            return {"error": "Similarity search failed", "details": str(e)}
+            return {"snippet": "Search failed."}
 
         if not docs_and_scores:
-            print("[WARN] No relevant content found for query.")
             return {"snippet": "I do not have the sufficient knowledge to answer this query."}
 
         combined_snippet = "\n\n".join([doc.page_content for doc, _ in docs_and_scores])
-        print(f"[DEBUG] Combined snippet length: {len(combined_snippet)} characters")
 
-        # Step 4: Call OpenAI with retrieved context
-        print("[STEP 4] Sending request to OpenAI API...")
+        # Step 4: Build the conversation prompt
+        conversation_history = "\n".join(
+            [f"{msg['sender'].capitalize()}: {msg['text']}" for msg in context_messages]
+        )
+
         prompt = f"""
         You are an educational assistant.
 
@@ -391,42 +390,33 @@ async def guest_chatbot(
         Knowledge Base:
         {combined_snippet}
 
-        User Query:
+        Conversation so far:
+        {conversation_history}
+
+        Latest User Query:
         {query}
         """
 
+        # Step 5: Get OpenAI completion
         try:
             response = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2
             )
-            print("[DEBUG] OpenAI API call succeeded.")
+            gpt_answer = response.choices[0].message.content.strip()
         except Exception as e:
-            print("[ERROR] OpenAI API call failed:", e)
-            return {"error": "OpenAI API request failed", "details": str(e)}
+            print("[ERROR] OpenAI API request failed:", e)
+            return {"snippet": "AI response generation failed."}
 
-        gpt_answer = response.choices[0].message.content.strip() if response.choices else None
-        if not gpt_answer:
-            print("[WARN] No answer returned from OpenAI response.")
-            return {"snippet": "I do not have the sufficient knowledge to answer this query."}
-
-        # Step 5: Post-check for fallback phrasing (to ensure honesty)
-        if "I do not have the sufficient knowledge" in gpt_answer:
-            print("[INFO] Model indicated insufficient knowledge.")
-        else:
-            print(f"[INFO] Final GPT answer length: {len(gpt_answer)} characters")
-
+        print("[INFO] Final Answer:", gpt_answer)
         print("==================== GUEST CHATBOT REQUEST END ====================\n")
 
         return {"snippet": gpt_answer}
 
     except Exception as e:
-        print("[FATAL ERROR] Unexpected failure in guest_chatbot route:", e)
-        import traceback
-        traceback.print_exc()
-        return {"error": "Internal server error", "details": str(e)}
-
+        print("[FATAL ERROR]", e)
+        return {"snippet": "Internal server error."}
 
 
 @app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
