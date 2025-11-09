@@ -386,17 +386,17 @@ async def guest_chatbot(request: ChatRequestGuestChatbot, db: Session = Depends(
         # Step 5: Construct prompt
         prompt = f"""
         You are an educational assistant.
-
-        Use only the following knowledge base content to answer.
-        If the information below does not help you answer the user's query,
-        reply exactly with: "I do not have the sufficient knowledge to answer this query."
-
-        Knowledge Base:
+        
+        Answer the user's query **briefly and clearly in 2–5 sentences** using only the knowledge base below.
+        If the knowledge base does not provide enough information, reply exactly:
+        "I do not have the sufficient knowledge to answer this query."
+        
+        Knowledge Base (use only relevant content):
         {combined_snippet}
-
+        
         Conversation so far:
         {conversation_context}
-
+        
         Latest User Query:
         {request.query}
         """
