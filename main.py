@@ -461,6 +461,27 @@ async def guest_chatbot(request: ChatRequestGuestChatbot, db: Session = Depends(
         gpt_answer = response.choices[0].message.content.strip()
 
         print("[INFO] Final Answer:", gpt_answer)
+
+        # -------------------- Log usage --------------------
+        usage = response.usage
+        prompt_tokens = usage.prompt_tokens
+        completion_tokens = usage.completion_tokens
+        
+        # Calculate API cost
+        call_cost = calculate_openai_cost("gpt-4o-mini", prompt_tokens, completion_tokens, multiplier=1.0)
+        print(f"[INFO] OpenAI API cost for this call: ${call_cost}")
+        
+        # Save usage in DB under 'guest'
+        log_openai_usage(
+            db=db,
+            user_id="guest",  # <-- logging as guest
+            model_name="gpt-4o-mini",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=call_cost
+        )
+        print("[INFO] API usage logged in database for guest user")
+        
         print("==================== GUEST CHATBOT REQUEST END ====================\n")
 
         return {"snippet": gpt_answer}
@@ -1309,9 +1330,20 @@ def get_context_gist(user_id, max_tokens=1000):
     for entry in context_entries:
         gist.append(f"{entry['role'].capitalize()}: {entry['content']}")
     return "\n".join(gist)
+    
+#classify query type
+def classify_query_type(
+    query: str, 
+    context_gist: str, 
+    user_id: str, 
+    db: Session = Depends(get_db)
+) -> str:
+    """
+    Use GPT to classify if a query is 'context_only', 'pdf_only', or 'mixed'.
+    Logs OpenAI usage against the user_id if db session is provided.
+    """
+    REWRITER_MODEL = "gpt-4o-mini"
 
-def classify_query_type(query: str, context_gist: str) -> str:
-    """Use GPT to classify if query is context_only, pdf_only, or mixed."""
     prompt = f"""
     You are a classifier assistant. 
     Determine whether the following user query requires:
@@ -1327,12 +1359,38 @@ def classify_query_type(query: str, context_gist: str) -> str:
 
     Respond with exactly one word: context_only, pdf_only, or mixed.
     """
+    
+    print(f"[STEP] Sending classification request to OpenAI for user_id={user_id}")
     response = openai_client.chat.completions.create(
         model=REWRITER_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0
     )
-    return response.choices[0].message.content.strip()
+
+    gpt_classification = response.choices[0].message.content.strip()
+    print(f"[INFO] Classification result for user_id={user_id}: {gpt_classification}")
+
+    # -------------------- Log usage --------------------
+    if db:
+        usage = response.usage
+        prompt_tokens = usage.prompt_tokens
+        completion_tokens = usage.completion_tokens
+
+        call_cost = calculate_openai_cost(REWRITER_MODEL, prompt_tokens, completion_tokens, multiplier=1.0)
+        print(f"[INFO] OpenAI API cost for classification call: ${call_cost}")
+
+        log_openai_usage(
+            db=db,
+            user_id=user_id,
+            model_name=REWRITER_MODEL,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=call_cost
+        )
+        print(f"[INFO] API usage logged for user_id={user_id}")
+
+    return gpt_classification
+
 
 def append_to_user_context(user_id, role, content, pdf_meta=None):
     """
@@ -1369,12 +1427,16 @@ def get_vectorstore_from_cache(gcs_prefix: str, embeddings):
 
     return vectorstore  
 
-def is_pdf_request(query: str) -> bool:
+def is_pdf_request(
+    query: str, 
+    user_id: str, 
+    db: Session
+) -> bool:
     """
     Ask OpenAI whether the user wants PDF links.
     Returns True if the model answers 'YES', False otherwise.
+    Logs API usage if db session is provided.
     """
-    # Use a single, properly formatted triple-quoted string
     prompt = (
         "You are a strict intent classifier.\n\n"
         "Determine whether the following user query is asking to fetch PDF files or PDF links.\n"
@@ -1388,8 +1450,33 @@ def is_pdf_request(query: str) -> bool:
             messages=[{"role": "user", "content": prompt}],
             temperature=0
         )
+
+        # -------------------- Log usage --------------------
+        if db is not None:
+            try:
+                usage = response.usage
+                prompt_tokens = usage.prompt_tokens
+                completion_tokens = usage.completion_tokens
+
+                call_cost = calculate_openai_cost(
+                    "gpt-4o-mini", prompt_tokens, completion_tokens, multiplier=1.0
+                )
+
+                log_openai_usage(
+                    db=db,
+                    user_id=user_id,  # log with the user_id
+                    model_name="gpt-4o-mini",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cost_usd=call_cost
+                )
+                print(f"[INFO] OpenAI API usage logged for user {user_id}, cost: ${call_cost}")
+            except Exception as e:
+                print(f"[WARN] Failed to log API usage for is_pdf_request: {e}")
+
         answer = response.choices[0].message.content.strip().upper()
         return answer.startswith("YES")
+
     except Exception as e:
         print(f"[ERROR] is_pdf_request failed: {e}")
         # fallback: treat as not a PDF request
@@ -1398,10 +1485,12 @@ def is_pdf_request(query: str) -> bool:
 def generate_drive_pdf_url(file_id: str) -> str:
         return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
 
-def is_educational_query_openai(query: str) -> bool:
+def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
     """
     Returns True if OpenAI classifies the query as educational, False otherwise.
+    Logs OpenAI API usage to the database.
     """
+    # -------------------- Prepare prompt --------------------
     prompt = (
         "You are a helpful assistant that classifies queries as educational or not.\n\n"
         "Determine if the following query is educational, i.e., related to school subjects, "
@@ -1409,6 +1498,7 @@ def is_educational_query_openai(query: str) -> bool:
         f"Query: \"{query}\""
     )
 
+    # -------------------- Call OpenAI --------------------
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -1416,7 +1506,36 @@ def is_educational_query_openai(query: str) -> bool:
     )
 
     answer = response.choices[0].message.content.strip().lower()
-    return answer.startswith("yes")
+    is_educational = answer.startswith("yes")
+
+    # -------------------- Log usage --------------------
+    usage = getattr(response, "usage", None)
+    if usage:
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+
+        # Calculate API cost
+        call_cost = calculate_openai_cost(
+            model_name="gpt-4o-mini",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            multiplier=1.0
+        )
+        print(f"[INFO] OpenAI API cost for this call: ${call_cost}")
+
+        # Save usage in DB for the user
+        log_openai_usage(
+            db=db,
+            user_id=user_id,
+            model_name="gpt-4o-mini",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=call_cost
+        )
+        print(f"[INFO] API usage logged in database for user_id={user_id}")
+
+    return is_educational
+    
 
     
 @app.get("/search")
@@ -1454,7 +1573,7 @@ async def search_pdfs(
         return JSONResponse(results)
 
      # ------------------ Step 0: Check if query is educational ------------------
-    if not is_educational_query_openai(query):
+    if not is_educational_query_openai(query, user_id=user_id, db=db):
         print(f"[WARN] Query not educational: {query}")
         # Return an empty result or a friendly message
         results = [{
@@ -1501,7 +1620,9 @@ async def search_pdfs(
     # -------------------- Step 0: Context gist --------------------
     context_gist = get_context_gist(user_id)
     is_first_query = len(user_contexts[user_id]) == 0
-    query_type = classify_query_type(query, context_gist)
+    
+    query_type = classify_query_type(query, context_gist,user_id)
+    
     if is_first_query:
         query_type = "pdf_only"
         print(f"[DEBUG] First query for user, forcing query_type to 'pdf_only'")
@@ -1538,7 +1659,7 @@ async def search_pdfs(
     # -------------------- Step 1b: Handle PDF link requests --------------------
     pdf_urls_to_send = []
 
-    if pdf_files and is_pdf_request(query):
+    if pdf_files and is_pdf_request(query, user_id=user_id, db=db):
         query_lower = query.lower()
         print(f"[DEBUG] Query received: {query_lower}")
         print(f"[DEBUG] Total PDFs available: {len(pdf_files)}")
