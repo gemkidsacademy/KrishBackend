@@ -351,7 +351,7 @@ async def guest_chatbot(
 
         # Step 2: Create vector store in memory
         print("[STEP 2] Creating FAISS vector store with OpenAI embeddings...")
-        api_key = os.environ.get("OPENAI_API_KEY_S")  # use your existing key
+        api_key = os.environ.get("OPENAI_API_KEY_S")
         if not api_key:
             raise ValueError("Missing OPENAI_API_KEY_S environment variable")
 
@@ -374,7 +374,7 @@ async def guest_chatbot(
 
         if not docs_and_scores:
             print("[WARN] No relevant content found for query.")
-            return {"snippet": "No relevant content found."}
+            return {"snippet": "I do not have the sufficient knowledge to answer this query."}
 
         combined_snippet = "\n\n".join([doc.page_content for doc, _ in docs_and_scores])
         print(f"[DEBUG] Combined snippet length: {len(combined_snippet)} characters")
@@ -384,11 +384,15 @@ async def guest_chatbot(
         prompt = f"""
         You are an educational assistant.
 
-        Based on the following content from the knowledge base:
+        Use only the following knowledge base content to answer.
+        If the information below does not help you answer the user's query,
+        reply exactly with: "I do not have the sufficient knowledge to answer this query."
+
+        Knowledge Base:
         {combined_snippet}
 
-        Answer the user query concisely and clearly:
-        '{query}'
+        User Query:
+        {query}
         """
 
         try:
@@ -402,15 +406,19 @@ async def guest_chatbot(
             print("[ERROR] OpenAI API call failed:", e)
             return {"error": "OpenAI API request failed", "details": str(e)}
 
-        gpt_answer = response.choices[0].message.content if response.choices else None
+        gpt_answer = response.choices[0].message.content.strip() if response.choices else None
         if not gpt_answer:
             print("[WARN] No answer returned from OpenAI response.")
-            return {"snippet": "No answer generated."}
+            return {"snippet": "I do not have the sufficient knowledge to answer this query."}
 
-        print(f"[INFO] Final GPT answer length: {len(gpt_answer)} characters")
+        # Step 5: Post-check for fallback phrasing (to ensure honesty)
+        if "I do not have the sufficient knowledge" in gpt_answer:
+            print("[INFO] Model indicated insufficient knowledge.")
+        else:
+            print(f"[INFO] Final GPT answer length: {len(gpt_answer)} characters")
+
         print("==================== GUEST CHATBOT REQUEST END ====================\n")
 
-        # Step 5: Return response to frontend
         return {"snippet": gpt_answer}
 
     except Exception as e:
