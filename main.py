@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.dialects.postgresql import UUID
 
