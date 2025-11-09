@@ -1,14 +1,11 @@
 import random
 import time
 from dotenv import load_dotenv
-from typing import Optional, List
+from typing import Optional, List, Dict
 import pandas as pd
 from cachetools import TTLCache
 import re 
 from langchain_core.documents import Document
-
-
-
 
 #Twilio API
 from twilio.rest import Client
@@ -30,6 +27,7 @@ from werkzeug.security import generate_password_hash
 import uuid
 from uuid import uuid4
 from datetime import datetime, timedelta
+
 import json
 import os
 import io
@@ -347,6 +345,7 @@ def send_otp_sms(phone_number: str, otp: int):
     )
     print(f"Sent OTP {otp} to {phone_number}, SID: {message.sid}")
 
+
 def calculate_openai_cost(model_name: str, prompt_tokens: int, completion_tokens: int, multiplier: float = 1.0) -> float:
     """
     Calculate approximate OpenAI API cost in USD.
@@ -386,6 +385,46 @@ async def root():
 def get_all_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
     return users
+@app.get("/api/openai-usage", response_model=List[Dict[str, float]])
+def get_openai_usage(db: Session = Depends(get_db)):
+    """
+    Returns total OpenAI API usage per user for the last 30 days.
+    Includes debug print statements for tracing.
+    """
+    print("\n[DEBUG] Starting /api/openai-usage endpoint")
+
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    print(f"[DEBUG] Fetching usage records from {thirty_days_ago} to now")
+
+    try:
+        # Query total cost grouped by user_id for last 30 days
+        usage_records = (
+            db.query(
+                OpenAIUsageLog.user_id,
+                func.sum(OpenAIUsageLog.cost_usd).label("total_amount")
+            )
+            .filter(OpenAIUsageLog.timestamp >= thirty_days_ago)
+            .group_by(OpenAIUsageLog.user_id)
+            .all()
+        )
+
+        print(f"[DEBUG] Number of users with usage in last 30 days: {len(usage_records)}")
+        
+        # Convert SQLAlchemy results to JSON-friendly format
+        result = []
+        for record in usage_records:
+            record_dict = {"user": record.user_id, "amount_usd": float(record.total_amount or 0)}
+            print(f"[DEBUG] User: {record.user_id}, Total Usage: ${record_dict['amount_usd']:.2f}")
+            result.append(record_dict)
+
+        print("[DEBUG] Finished preparing usage data response")
+        return result
+
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch usage data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch usage data: {str(e)}")
+
+        
 
 # --- Guest Chatbot endpoint ---
 @app.post("/guest-chatbot")
