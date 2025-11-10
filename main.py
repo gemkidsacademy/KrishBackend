@@ -117,8 +117,8 @@ creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPE
 drive_service = build("drive", "v3", credentials=creds)
 
 
-DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
-#DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
+#DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
+DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
 
 
 
@@ -1027,14 +1027,22 @@ def list_pdfs(folder_id, path=""):
 
     while True:
         try:
-            response = drive_service.files().list(
+            response = drive_service.files().list( 
             q=f"'{folder_id}' in parents and trashed=false",
             spaces='drive',
-            fields='nextPageToken, files(id, name, mimeType, webViewLink)',
+            fields='nextPageToken, files(id, name, mimeType, webViewLink, owners(emailAddress))',
             pageToken=page_token,
-            includeItemsFromAllDrives=True,   # <-- ADD THIS
-            supportsAllDrives=True             # <-- AND THIS
+            includeItemsFromAllDrives=True,  # required for shared folders
+            supportsAllDrives=True,          # required for shared folders
+            corpora='user'                   # crucial for shared folders visibility
         ).execute()
+        
+        print("\n=== DEBUG INFO ===")
+        print(f"Folder ID being listed: {folder_id}")
+        print(f"Number of files returned: {len(response.get('files', []))}")
+        for f in response.get('files', []):
+            print(f" - {f['name']} ({f['id']}) | Owner: {f.get('owners', [{}])[0].get('emailAddress')}")
+        print("===================")
         except Exception as e:
             print(f"[ERROR] Failed to list files in folder_id='{folder_id}': {e}")
             return results
