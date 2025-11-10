@@ -1604,7 +1604,7 @@ async def search_pdfs(
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
-    
+    results, top_chunks = [], []
     # ------------------ Step 0: Check interaction limit ------------------
     # Ensure the global user_contexts dictionary exists for the user
     global user_contexts
@@ -1647,12 +1647,15 @@ async def search_pdfs(
 
     # ------------------ Initialize vector stores ------------------
     # ------------------ Ensure vector stores exist ------------------
+    
+    
     if not pdf_listing_done:
         print("[INFO] Fetching PDF list from Google Drive for the first time...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
         
         pdf_listing_done = True
-    missing_vectorstores = []
+    #here 
+    
     
     for pdf in all_pdfs:
         pdf_name = pdf["name"]
@@ -1662,16 +1665,12 @@ async def search_pdfs(
         if not gcs_vectorstore_exists(gcs_prefix):  # <-- new helper function
             missing_vectorstores.append(pdf)
     
-    if missing_vectorstores:
-        print(f"[DEBUG] Missing vectorstores for {len(missing_vectorstores)} PDFs, generating them...")
-        ensure_vectorstores_for_all_pdfs(missing_vectorstores)
-    else:
-        print(f"[DEBUG] All vectorstores exist for user {user_id}")
+    
     
     user_vectorstores_initialized[user_id] = True
     print(f"[INFO] Vector stores initialized for user {user_id}")
-
-    results, top_chunks = [], []
+    
+    
 
     # -------------------- Step 0: Context gist --------------------
     context_gist = get_context_gist(user_id)
@@ -1963,6 +1962,25 @@ Guidelines:
 # Utility: hash password
 
 # Bulk upload endpoint
+
+
+@app.post("/admin/create_vectorstores")
+async def create_vectorstores():
+    # Step 1: Fetch all PDFs from the source folder
+    pdf_files = list_pdfs(DEMO_FOLDER_ID)
+
+    if not pdf_files:
+        return {"status": "warning", "message": "No PDFs found in the source folder."}
+
+    # Step 2: Call your existing helper function
+    ensure_vectorstores_for_all_pdfs(pdf_files)
+
+    return {
+        "status": "success",
+        "message": f"Vector stores processed for {len(pdf_files)} PDFs."
+    }
+
+
 @app.post("/api/users/bulk")
 async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_db)):
     print("DEBUG: Bulk CSV upload request received")
