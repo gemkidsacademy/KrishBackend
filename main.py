@@ -1657,18 +1657,17 @@ async def search_pdfs(
     #here 
     
     
-    for pdf in all_pdfs:
-        pdf_name = pdf["name"]
-        pdf_base_name = pdf_name.rsplit(".", 1)[0]
-        gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), f"vectorstore_{pdf_base_name}") + "/"
+    #for pdf in all_pdfs:
+     #   pdf_name = pdf["name"]
+      ## gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), f"vectorstore_{pdf_base_name}") + "/"
     
-        if not gcs_vectorstore_exists(gcs_prefix):  # <-- new helper function
-            missing_vectorstores.append(pdf)
-    
+    #    if not gcs_vectorstore_exists(gcs_prefix):  # <-- new helper function
+     #       missing_vectorstores.append(pdf)
     
     
-    user_vectorstores_initialized[user_id] = True
-    print(f"[INFO] Vector stores initialized for user {user_id}")
+    
+    #user_vectorstores_initialized[user_id] = True
+   # print(f"[INFO] Vector stores initialized for user {user_id}")
     
     
 
