@@ -1542,6 +1542,9 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
     Returns True if OpenAI classifies the query as educational, False otherwise.
     Logs OpenAI API usage to the database.
     """
+    # -------------------- Quick check for 'year' or 'term' --------------------
+    if any(word in query.lower() for word in ["year", "term"]):
+        return True
     # -------------------- Prepare prompt --------------------
     prompt = (
         "You are a helpful assistant that classifies queries as educational or not.\n\n"
