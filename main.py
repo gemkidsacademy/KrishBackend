@@ -1037,12 +1037,12 @@ def list_pdfs(folder_id, path=""):
             corpora='user'                   # crucial for shared folders visibility
         ).execute()
         
-        print("\n=== DEBUG INFO ===")
-        print(f"Folder ID being listed: {folder_id}")
-        print(f"Number of files returned: {len(response.get('files', []))}")
-        for f in response.get('files', []):
-            print(f" - {f['name']} ({f['id']}) | Owner: {f.get('owners', [{}])[0].get('emailAddress')}")
-        print("===================")
+            print("\n=== DEBUG INFO ===")
+            print(f"Folder ID being listed: {folder_id}")
+            print(f"Number of files returned: {len(response.get('files', []))}")
+            for f in response.get('files', []):
+                print(f" - {f['name']} ({f['id']}) | Owner: {f.get('owners', [{}])[0].get('emailAddress')}")
+            print("===================")
         except Exception as e:
             print(f"[ERROR] Failed to list files in folder_id='{folder_id}': {e}")
             return results
