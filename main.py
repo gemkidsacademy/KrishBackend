@@ -1768,14 +1768,20 @@ async def search_pdfs(
     
         print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
     
-        # Prepare response
+         # -------------------- Prepare structured response --------------------
         source_name = "Academy Answer"
-    
         results.append({
             "name": f"**{source_name}**",
             "snippet": answer_text,
             "links": pdf_urls_to_send
         })
+    
+        # -------------------- Step 8: Update user context --------------------
+        append_to_user_context(user_id, "user", query)
+        append_to_user_context(user_id, "assistant", answer_text)
+    
+        print("==================== SEARCH REQUEST END ====================\n")
+        return JSONResponse(results)
 
     
 
