@@ -1388,30 +1388,41 @@ def classify_query_type(
     query: str, 
     context_gist: str, 
     user_id: str, 
+    pdf_list: list,  # new: list of available PDFs for the user
     db: Session  # remove Depends
 ) -> str:
     """
-    Use GPT to classify if a query is 'context_only', 'pdf_only', or 'mixed'.
+    Classify if a query is 'context_only', 'pdf_only', or 'mixed'.
+    Now takes PDF list into account.
     Logs OpenAI usage against the user_id if db session is provided.
     """
     REWRITER_MODEL = "gpt-4o-mini"
 
+    # Prepare a short summary of PDFs
+    pdf_summary = "\n".join([f"- {pdf['name']}" for pdf in pdf_list[:50]])  # limit to 50 PDFs
+
     prompt = f"""
-    You are a classifier assistant. 
-    Determine whether the following user query requires:
-    1. Only the previous conversation context to answer (context_only)
-    2. Only new information from PDF resources (pdf_only)
-    3. Both previous context and PDFs (mixed)
+You are a classifier assistant. 
+Determine whether the following user query requires:
+1. Only previous conversation context to answer (context_only)
+2. Only new information from PDF resources (pdf_only)
+3. Both previous context and PDFs (mixed)
 
-    Previous Context (gist):
-    {context_gist}
+Previous Context (gist):
+{context_gist}
 
-    User Query:
-    {query}
+Available PDFs (titles / topics):
+{pdf_summary}
 
-    Respond with exactly one word: context_only, pdf_only, or mixed.
-    """
-    
+User Query:
+{query}
+
+Instructions:
+- If the answer could exist in any of the PDFs above, classify as 'pdf_only' or 'mixed' appropriately.
+- If it can only be answered from previous conversation context, classify as 'context_only'.
+- Respond with exactly one word: context_only, pdf_only, or mixed.
+"""
+
     print(f"[STEP] Sending classification request to OpenAI for user_id={user_id}")
     response = openai_client.chat.completions.create(
         model=REWRITER_MODEL,
@@ -1440,6 +1451,12 @@ def classify_query_type(
             cost_usd=call_cost
         )
         print(f"[INFO] API usage logged for user_id={user_id}")
+
+    # -------------------- Safety fallback --------------------
+    # If user requested a class_name / PDFs explicitly, ensure at least 'pdf_only'
+    if gpt_classification == "context_only" and pdf_list:
+        gpt_classification = "pdf_only"
+        print(f"[INFO] Fallback applied: query contains PDFs, forcing 'pdf_only'")
 
     return gpt_classification
 
@@ -1676,7 +1693,18 @@ async def search_pdfs(
     is_first_query = len(user_contexts[user_id]) == 0
     
     # Route
-    query_type = classify_query_type(query, context_gist, user_id, db=db)
+    class_names = [cn.strip().lower() for cn in class_name.split(",")]
+
+        # Keep PDFs whose path starts with any of the folder names
+    pdf_files = [
+    pdf for pdf in all_pdfs
+    if any(pdf.get("path", "").lower().startswith(cn) for cn in class_names)
+    ]
+
+    print(f"[DEBUG] PDFs matching classes {class_names}: {len(pdf_files)}")
+    for pdf in pdf_files:
+    print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")    
+    query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
 
     
     if is_first_query:
@@ -1695,17 +1723,7 @@ async def search_pdfs(
         
         # Split class_name into a list of folder names, trimming whitespace
         #here
-        class_names = [cn.strip().lower() for cn in class_name.split(",")]
-
-        # Keep PDFs whose path starts with any of the folder names
-        pdf_files = [
-            pdf for pdf in all_pdfs
-            if any(pdf.get("path", "").lower().startswith(cn) for cn in class_names)
-        ]
-
-        print(f"[DEBUG] PDFs matching classes {class_names}: {len(pdf_files)}")
-        for pdf in pdf_files:
-            print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")
+        
 
         if not pdf_files:
             print(f"[WARNING] No PDFs found for '{class_name}'. GPT will fallback to context-only or external knowledge")
