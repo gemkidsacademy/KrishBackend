@@ -60,7 +60,7 @@ from rapidfuzz import fuzz
 
 #global dictionary gpt maintains context in the conversation
 user_contexts: dict[str, list[dict[str, str]]] = {}
-MAX_INTERACTIONS = 2
+MAX_INTERACTIONS = 20
 interaction=0
 #for creating user passwords
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
