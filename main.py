@@ -1696,6 +1696,7 @@ async def search_pdfs(
         
         
         # Split class_name into a list of folder names, trimming whitespace
+        #here
         class_names = [cn.strip().lower() for cn in class_name.split(",")]
 
         # Keep PDFs whose path starts with any of the folder names
@@ -1716,29 +1717,36 @@ async def search_pdfs(
     # -------------------- Step 1b: Check query intent with OpenAI --------------------
     # -------------------- Step 1b: Handle PDF link requests --------------------
     pdf_urls_to_send = []
-
     if pdf_files and is_pdf_request(query, user_id=user_id, db=db):
         query_lower = query.lower()
         print(f"[DEBUG] Query received: {query_lower}")
         print(f"[DEBUG] Total PDFs available: {len(pdf_files)}")
     
-        # Extract term and week from query
-        term_match = re.search(r"term\s*(\d+)", query_lower)
-        week_match = re.search(r"week\s*(\d+)", query_lower)
-        query_term = term_match.group(1) if term_match else None
-        query_week = week_match.group(1) if week_match else None
-        print(f"[DEBUG] Extracted from query -> term: {query_term}, week: {query_week}")
+        # Extract year, term, and week from query
+        year_match = re.search(r"year\s*(\d+)", query_lower)
+        query_year = year_match.group(1) if year_match else None
     
-        # Filter PDFs
+        term_match = re.search(r"term\s*(\d+)", query_lower)
+        query_term = term_match.group(1) if term_match else None
+    
+        week_match = re.search(r"week\s*(\d+)", query_lower)
+        query_week = week_match.group(1) if week_match else None
+    
+        print(f"[DEBUG] Extracted from query -> year: {query_year}, term: {query_term}, week: {query_week}")
+    
+        # Filter PDFs based on year, term, and optionally week
         filtered_pdfs = []
         for pdf in pdf_files:
+            path_lower = pdf.get("path", "").lower()
             name_lower = pdf["name"].lower()
     
-            # Robust regex for term/week (handles commas and spaces)
+            # Skip PDFs not matching the requested year
+            if query_year and f"year {query_year}" not in path_lower:
+                continue
+    
+            # Extract term/week from PDF name
             term_matches = re.findall(r"t\s*(\d+)", name_lower)
             week_matches = re.findall(r"w\s*(\d+)", name_lower)
-    
-            print(f"[DEBUG] Checking PDF: {pdf['name']} -> term_matches: {term_matches}, week_matches: {week_matches}")
     
             term_match_ok = (query_term is None or query_term in term_matches)
             week_match_ok = (query_week is None or query_week in week_matches)
@@ -1749,26 +1757,27 @@ async def search_pdfs(
     
         print(f"[DEBUG] PDFs after filtering: {[pdf['name'] for pdf in filtered_pdfs]}")
     
-        # Generate URLs
-        pdf_urls_to_send += [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
+        # Generate URLs for matched PDFs
+        if filtered_pdfs:
+            pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
+            urls_text = "\n".join(pdf_urls_to_send)
+            answer_text = f"Here are the PDFs you requested:\n{urls_text}"
+        else:
+            pdf_urls_to_send = []
+            answer_text = "No PDFs found."
+    
         print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
     
         # Prepare response
         source_name = "Academy Answer"
-        answer_text = "Here are the PDFs you requested." if pdf_urls_to_send else "No PDFs found."
     
         results.append({
             "name": f"**{source_name}**",
             "snippet": answer_text,
             "links": pdf_urls_to_send
         })
+
     
-        # Update user context
-        append_to_user_context(user_id, "user", query)
-        append_to_user_context(user_id, "assistant", answer_text)
-    
-        print("==================== SEARCH REQUEST END ====================\n")
-        return JSONResponse(results)
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
