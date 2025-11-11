@@ -117,27 +117,7 @@ openai_client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY_S")
 )
 
-# 1. Fetch all embeddings from Postgres
-all_embeddings = db.query(Embedding).all()
-vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
-metadata = [
-    {
-        "pdf_name": e.pdf_name,
-        "class_name": e.class_name,
-        "page_number": e.page_number,
-        "chunk_index": e.chunk_index,
-        "pdf_link": e.pdf_link,
-        "chunk_text": e.chunk_text
-    }
-    for e in all_embeddings
-]
 
-
-# 2. Build FAISS index
-d = vectors.shape[1]  # embedding dimension, e.g., 3072
-index = faiss.IndexFlatIP(d)  # IP = inner product (for cosine similarity)
-faiss.normalize_L2(vectors)    # normalize for cosine similarity
-index.add(vectors)
 
 
 # -----------------------------
@@ -358,7 +338,28 @@ def get_db():
         yield db
     finally:
         db.close()
+        
+# 1. Fetch all embeddings from Postgres
+all_embeddings = db.query(Embedding).all()
+vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
+metadata = [
+    {
+        "pdf_name": e.pdf_name,
+        "class_name": e.class_name,
+        "page_number": e.page_number,
+        "chunk_index": e.chunk_index,
+        "pdf_link": e.pdf_link,
+        "chunk_text": e.chunk_text
+    }
+    for e in all_embeddings
+]
 
+
+# 2. Build FAISS index
+d = vectors.shape[1]  # embedding dimension, e.g., 3072
+index = faiss.IndexFlatIP(d)  # IP = inner product (for cosine similarity)
+faiss.normalize_L2(vectors)    # normalize for cosine similarity
+index.add(vectors)
 # Generate OTP
 def generate_otp():
     return random.randint(100000, 999999)
