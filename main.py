@@ -191,12 +191,12 @@ class Embedding(Base):
     id = Column(Integer, primary_key=True)
     pdf_name = Column(String, nullable=False)
     class_name = Column(String, nullable=True)
-    chunk_id = Column(String, nullable=False)
-    embedding_vector = Column(ARRAY(Float), nullable=False)  # store as array
+    pdf_link = Column(String, nullable=True)       # added to match metadata
     chunk_text = Column(Text, nullable=False)
     page_number = Column(Integer, nullable=False)
     chunk_index = Column(Integer, nullable=False)
-
+    chunk_id = Column(String, nullable=False)   
+ 
 class GuestChatbotMessage(BaseModel):
     role: str
     content: str
