@@ -5,7 +5,8 @@
 #    pip-compile requirements.in
 #
 
-pgvector==1.4.0   # or latest
+pgvector==0.4.1
+
 
 
 python-multipart==0.0.9
