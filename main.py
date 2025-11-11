@@ -1217,11 +1217,19 @@ def create_vectorstore_for_pdf(pdf_file):
                 separators=["\n\n", "\n", " "]
             )
             page_chunks = text_splitter.create_documents([cleaned_text])
+            # Determine class_name robustly from pdf_path
+            path_parts = pdf_path.split("/")
+            class_name = next(
+                (part for part in path_parts if part.lower().startswith("year") or "kindergarten" in part.lower()),
+                "Unknown"
+            )
+
 
             for chunk_idx, chunk in enumerate(page_chunks, start=1):
                 # Ensure metadata is complete
                 chunk.metadata.update({
                     "pdf_name": pdf_name,
+                    "class_name": class_name,  # ✅ added
                     "page_number": page_num,
                     "chunk_index": chunk_idx,
                     "pdf_link": pdf_link,
