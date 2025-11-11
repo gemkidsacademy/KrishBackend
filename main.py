@@ -1992,7 +1992,7 @@ Guidelines:
 # Bulk upload endpoint
 def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
-    Load a FAISS vector store from GCS directly into memory using PyCallbackIOReader.
+    Load a FAISS vector store from GCS directly into memory.
     Handles docstore tuples or dict/InMemoryDocstore.
     """
     print(f"\n[DEBUG][GCS-LOAD] ======== Starting load_vectorstore_from_gcs_in_memory ========")
@@ -2008,8 +2008,7 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
             raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'")
         print(f"[DEBUG][GCS-LOAD] Found {len(blobs)} blobs in GCS prefix.")
 
-        index_bytes = None
-        docstore_bytes = None
+        index_bytes, docstore_bytes = None, None
         for blob in blobs:
             if blob.name.endswith(".faiss"):
                 index_bytes = blob.download_as_bytes()
@@ -2067,12 +2066,97 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         traceback.print_exc()
         raise
 
+
+# ---------------------------
+# Bulk upload embeddings endpoint
+# ---------------------------
+# ---------- Load FAISS vectorstore from GCS in memory ----------
+def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
+    """
+    Load a FAISS vector store from GCS directly into memory, mimicking
+    the successful behavior of load_vectorstore_from_gcs.
+    """
+    print(f"\n[DEBUG][GCS-LOAD] ======== Starting load_vectorstore_from_gcs_in_memory ========")
+    print(f"[DEBUG][GCS-LOAD] Prefix: {gcs_prefix}")
+
+    try:
+        if not gcs_client or not gcs_bucket_name:
+            raise RuntimeError("GCS client or bucket name not initialized")
+
+        # List blobs under prefix
+        bucket = gcs_client.bucket(gcs_bucket_name)
+        blobs = list(bucket.list_blobs(prefix=gcs_prefix))
+        if not blobs:
+            raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'")
+        print(f"[DEBUG][GCS-LOAD] Found {len(blobs)} blobs in GCS prefix.")
+
+        # Find index and docstore files
+        index_bytes = None
+        docstore_bytes = None
+        for blob in blobs:
+            if blob.name.endswith(".faiss"):
+                index_bytes = blob.download_as_bytes()
+                print(f"[DEBUG][GCS-LOAD] Found FAISS index file: {blob.name}")
+            elif blob.name.endswith(".pkl"):
+                docstore_bytes = blob.download_as_bytes()
+                print(f"[DEBUG][GCS-LOAD] Found docstore file: {blob.name}")
+
+        if not index_bytes or not docstore_bytes:
+            raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'")
+
+        # Load FAISS index in memory
+        with io.BytesIO(index_bytes) as bio:
+            reader = faiss.PyCallbackIOReader(bio.read)
+            index = faiss.read_index(reader)
+        print("[DEBUG][GCS-LOAD] FAISS index loaded into memory.")
+
+        # Load docstore
+        raw_docstore = pickle.loads(docstore_bytes)
+        print(f"[DEBUG][GCS-LOAD] Raw docstore type: {type(raw_docstore)}")
+
+        # Handle tuple (docstore, index_to_docstore_id) or dict/InMemoryDocstore
+        if isinstance(raw_docstore, tuple) and len(raw_docstore) == 2:
+            docstore, index_to_docstore_id = raw_docstore
+            print("[DEBUG][GCS-LOAD] Unpacked tuple docstore and index_to_docstore_id")
+        else:
+            docstore = raw_docstore
+            if hasattr(docstore, "_dict"):
+                index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore._dict.keys())}
+            elif isinstance(docstore, dict):
+                index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore.keys())}
+            else:
+                raise RuntimeError(f"Unsupported docstore type: {type(docstore)}")
+            print(f"[DEBUG][GCS-LOAD] index_to_docstore_id mapping created with {len(index_to_docstore_id)} items.")
+
+        # Build inverse mapping
+        index_to_docstore_id_inverse = {v: k for k, v in index_to_docstore_id.items()}
+
+        # Construct FAISS vectorstore
+        vs = FAISS(
+            embedding_function=embeddings,
+            index=index,
+            docstore=docstore,
+            index_to_docstore_id=index_to_docstore_id
+        )
+        vs.index_to_docstore_id_inverse = index_to_docstore_id_inverse
+
+        print(f"[DEBUG][GCS-LOAD] Successfully loaded FAISS store in memory.")
+        print(f"[DEBUG][GCS-LOAD] ======== Finished load_vectorstore_from_gcs_in_memory ========\n")
+        return vs
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR][GCS-LOAD] Exception: {type(e).__name__} - {e}")
+        traceback.print_exc()
+        raise
+
+
 # ---------- Bulk upload embeddings endpoint ----------
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
-    Loads FAISS vector stores for all PDFs from GCS and inserts embeddings
-    into the DB, avoiding duplicates.
+    Loads FAISS vector stores for all PDFs from GCS in memory and inserts embeddings
+    into the DB, avoiding duplicates. Compatible with tuple/docstore variations.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
     total_uploaded = 0
@@ -2163,176 +2247,6 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
 
-
-
-
-        
-
-@app.post("/admin/create_vectorstores")
-async def create_vectorstores():
-    # Step 1: Fetch all PDFs from the source folder
-    pdf_files = list_pdfs(DEMO_FOLDER_ID)
-
-    if not pdf_files:
-        return {"status": "warning", "message": "No PDFs found in the source folder."}
-
-    # Step 2: Call your existing helper function
-    ensure_vectorstores_for_all_pdfs(pdf_files)
-
-    return {
-        "status": "success",
-        "message": f"Vector stores processed for {len(pdf_files)} PDFs."
-    }
-
-
-@app.post("/api/users/bulk")
-async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    print("DEBUG: Bulk CSV upload request received")
-
-    if not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Invalid file type. CSV required.")
-
-    try:
-        # Read CSV file safely
-        df = pd.read_csv(
-            file.file,
-            sep=None,
-            engine="python",
-            dtype={"phone_number": str},
-            encoding="utf-8-sig"
-        )
-
-        if df.empty:
-            raise HTTPException(status_code=400, detail="CSV file is empty")
-
-        # Normalize column names
-        df.columns = df.columns.str.strip().str.lower()
-        print(f"DEBUG: Columns after normalization: {list(df.columns)}")
-
-        # Ensure required columns exist
-        required_columns = {"name", "email"}
-        missing_columns = required_columns - set(df.columns)
-        if missing_columns:
-            raise HTTPException(
-                status_code=400,
-                detail=f"CSV file must contain columns: {required_columns}"
-            )
-
-        # --- Clean phone numbers ---
-        # --- Clean and normalize Australian phone numbers ---
-        def fix_phone_number(x):
-            if pd.isna(x):
-                return None
-            try:
-                phone = str(int(float(x)))  # Handle scientific notation like 4.12E+09
-            except:
-                phone = str(x).strip().lstrip("'")
-        
-            phone = phone.replace(" ", "").replace("-", "")
-        
-            # --- Normalize for Australian format ---
-            if phone.startswith("+"):
-                return phone  # already correct
-            elif phone.startswith("04"):
-                return f"+61{phone[1:]}"  # Convert 04... -> +61...
-            elif phone.startswith("4"):
-                return f"+61{phone}"  # Convert 4... -> +614...
-            elif phone.startswith("61"):
-                return f"+{phone}"  # Ensure leading +
-            else:
-                return phone  # fallback for unexpected formats
-        
-        if "phone_number" in df.columns:
-            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
-
-
-        if "phone_number" in df.columns:
-            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
-
-        # --- Fetch existing emails and phone numbers from DB ---
-        existing_users = db.query(User.email, User.phone_number).all()
-        existing_emails = {u.email for u in existing_users if u.email}
-        existing_phones = {u.phone_number for u in existing_users if u.phone_number}
-
-        print(f"DEBUG: Existing emails: {len(existing_emails)}, phones: {len(existing_phones)}")
-
-        users_to_add = []
-        skipped_users = []  # track skipped duplicates
-
-        for index, row in df.iterrows():
-            email = row.get("email", "").strip()
-            phone = row.get("phone_number")
-
-            # Skip duplicates
-            if email in existing_emails or (phone and phone in existing_phones):
-                skipped_users.append({
-                    "name": row.get("name"),
-                    "email": email,
-                    "phone_number": phone,
-                    "reason": "Duplicate email or phone number"
-                })
-                print(f"DEBUG: Skipped duplicate -> {email} / {phone}")
-                continue
-
-            try:
-                user_obj = User(
-                    name=row["name"].strip(),
-                    email=email,
-                    phone_number=phone,
-                    class_name=row.get("class_name"),
-                    password=row.get("password") or "placeholder",
-                )
-                users_to_add.append(user_obj)
-                print(f"DEBUG: Prepared new user {index}: {email}")
-            except Exception as e:
-                skipped_users.append({
-                    "name": row.get("name"),
-                    "email": email,
-                    "phone_number": phone,
-                    "reason": f"Error processing row: {e}"
-                })
-                print(f"ERROR: Failed to process row {index}: {e}")
-                continue
-
-        if not users_to_add and not skipped_users:
-            raise HTTPException(status_code=400, detail="No valid users found in CSV")
-
-        # --- Insert new users ---
-        if users_to_add:
-            db.add_all(users_to_add)
-            db.commit()
-            print(f"DEBUG: Inserted {len(users_to_add)} users into the database")
-
-        # --- Grant Google Drive access ---
-        for u in users_to_add:
-            try:
-                give_drive_access(DEMO_FOLDER_ID, u.email, role="reader")
-                print(f"DEBUG: Granted Drive access to {u.email}")
-            except Exception as e:
-                print(f"ERROR: Failed to give Drive access to {u.email}: {e}")
-
-        # --- Return detailed response ---
-        return {
-            "added_users": [
-                {
-                    "name": u.name,
-                    "email": u.email,
-                    "phone_number": u.phone_number,
-                    "class_name": u.class_name,
-                }
-                for u in users_to_add
-            ],
-            "skipped_users": skipped_users,
-            "summary": {
-                "added": len(users_to_add),
-                "skipped": len(skipped_users),
-                "total_rows": len(df),
-            }
-        }
-
-    except Exception as e:
-        print(f"EXCEPTION: Bulk upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 
