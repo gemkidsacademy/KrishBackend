@@ -1640,7 +1640,10 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
     return is_educational
 
 
-embedding_model = OpenAIEmbeddings(model="text-embedding-3-large")
+embedding_model = OpenAIEmbeddings(
+    model="text-embedding-3-large",
+    api_key=os.getenv("OPENAI_API_KEY_S")
+)
 
 def search_top_k(query_text: str, top_k: int = 5, class_filter: list = None):
     """
