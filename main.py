@@ -1891,62 +1891,58 @@ async def search_pdfs(
 
     
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
-    
+    # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
+    
     if pdf_files and not use_context_only:
         # Normalize class names for DB filtering
         class_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
-        print(f"[DEBUG] class_list for DB filtering: {class_list}")
-        print(f"[DEBUG] Query length: {len(query)} characters")
-        
+        print(f"[DEBUG] Normalized class_list for filtering: {class_list}")
+        print(f"[DEBUG] Attempting to fetch top {TOP_K} chunks from DB (embeddings table)")
+    
         # Fetch top-k chunks from embeddings table using similarity search
-        top_chunks = get_top_k_chunks_from_db(query, class_list, db, top_k=TOP_K)
+        top_chunks = get_top_k_chunks_from_db(query, class_list, db=db, top_k=TOP_K)
         print(f"[DEBUG] top_chunks returned from DB: {len(top_chunks)}")
-        
+    
         if top_chunks:
-            # Build context string using actual DB model attributes
-            context_texts = []
+            # Debug each chunk to trace possible lowercase/uppercase issues
+            print("[DEBUG] PDFs returned from DB for similarity search:")
             for idx, (doc, score) in enumerate(top_chunks):
                 pdf_name = doc.metadata.get('pdf_name', 'N/A')
+                pdf_name_lower = pdf_name.lower()
                 page_num = doc.metadata.get('page_number', 'N/A')
                 snippet_preview = doc.page_content[:100] if doc.page_content else "[EMPTY]"
                 if not doc.page_content.strip():
                     print(f"[WARN] Chunk {idx+1} has empty page_content! pdf_name={pdf_name}")
-                
-                print(f"[DEBUG] Chunk {idx+1}: pdf_name={pdf_name}, page={page_num}, score={score}, snippet_preview={snippet_preview}")
-                
-                context_texts.append(f"PDF: {pdf_name} (Page {page_num})\n{doc.page_content}")
-            
-            context_texts_str = "\n".join(context_texts)
-            print(f"[DEBUG] Total context_texts_str length: {len(context_texts_str)} characters")
-        else:
-            print(f"[DEBUG] No top chunks found, GPT will rely on context or external knowledge")
-            use_context_only = True
-
-        
-
-        
-        for idx, (doc, score) in enumerate(top_chunks[:5]):  # show first 5 for brevity
-            print(f"[DEBUG] Chunk {idx+1}: pdf_name={getattr(doc, 'pdf_name', 'N/A')}, score={score}, text_preview={getattr(doc,'chunk_text','')[:100]}")
-
-
-        # Sort top_chunks by score (descending = most relevant first)
-        top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
-        print(f"[DEBUG] Total top chunks after sorting: {len(top_chunks)}")
-        for idx, (doc, score) in enumerate(top_chunks):
-            print(f"[DEBUG] Sorted Chunk {idx+1}: pdf_name={doc.metadata.get('pdf_name')}, page={doc.metadata.get('page_number')}, score={score}, snippet={doc.page_content[:100]}")
-
-
-        if top_chunks:
+                print(f"[DEBUG] Chunk {idx+1}: pdf_name='{pdf_name}' (lower='{pdf_name_lower}'), page={page_num}, score={score}, snippet_preview='{snippet_preview}'")
+    
+            # Extra check: compare class_list vs actual PDF names in DB
+            pdf_names_in_db = [doc.metadata.get('pdf_name', 'N/A') for doc, _ in top_chunks]
+            for cn in class_list:
+                matched = [name for name in pdf_names_in_db if cn in name.lower()]
+                print(f"[DEBUG] Class '{cn}' matched PDFs: {matched if matched else 'NONE'}")
+    
+            # Sort top_chunks by score (descending = most relevant first)
+            top_chunks = sorted(top_chunks, key=lambda x: x[1], reverse=True)[:TOP_K]
+            print(f"[DEBUG] Total top chunks after sorting: {len(top_chunks)}")
+            for idx, (doc, score) in enumerate(top_chunks):
+                pdf_name = doc.metadata.get('pdf_name', 'N/A')
+                page_num = doc.metadata.get('page_number', 'N/A')
+                snippet_preview = doc.page_content[:100] if doc.page_content else "[EMPTY]"
+                print(f"[DEBUG] Sorted Chunk {idx+1}: pdf_name='{pdf_name}', page={page_num}, score={score}, snippet_preview='{snippet_preview}'")
+    
+            # Build context string once after sorting
             context_texts = [
-                f"PDF: {doc.metadata['pdf_name']} (Page {doc.metadata.get('page_number', 'N/A')})\n{doc.page_content}"
+                f"PDF: {doc.metadata.get('pdf_name','N/A')} (Page {doc.metadata.get('page_number','N/A')})\n{doc.page_content}"
                 for doc, _ in top_chunks
             ]
             context_texts_str = "\n".join(context_texts)
             print(f"[DEBUG] Context texts prepared, total length: {len(context_texts_str)} characters")
+    
         else:
-            print(f"[DEBUG] No top chunks found, GPT will rely on context or external knowledge")
+            print(f"[DEBUG] No top chunks found from DB. GPT will rely on context or external knowledge")
             use_context_only = True
+
 
     # -------------------- Step 3: Prepare GPT prompt --------------------
     reasoning_instruction = {
