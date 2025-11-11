@@ -2322,7 +2322,8 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
     try:
         # Step 0: Fetch PDFs
         print("[DEBUG] Fetching PDF list from Google Drive...")
-        all_pdfs = list_pdfs(os.environ.get("DEMO_FOLDER_ID", ""))
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        
         if not all_pdfs:
             raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
