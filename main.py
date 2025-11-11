@@ -1632,76 +1632,58 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
         print(f"[INFO] API usage logged in database for user_id={user_id}")
 
     return is_educational
-    
+
 def get_top_k_chunks_from_db(query_text: str, class_list: list, db: Session, top_k: int = 5):
     """
     Retrieve top-k PDF chunks from the DB using similarity search.
-    
-    Args:
-        query_text (str): The user's query.
-        class_list (list): List of class names to filter (case-insensitive, trims spaces).
-        db (Session): SQLAlchemy DB session.
-        top_k (int): Number of top chunks to return.
-    
-    Returns:
-        List of tuples: [(Embedding object, similarity_score), ...]
     """
-    if not class_list:
-        query = db.query(Embedding)
-        print("[DEBUG] No class filter provided, fetching all chunks.")
-    else:
-        # Case-insensitive, whitespace-trimmed filtering
-        filters = [
-            func.trim(func.lower(Embedding.class_name)).ilike(f"%{cn.lower().strip()}%")
-            for cn in class_list
-        ]
-        query = db.query(Embedding).filter(or_(*filters))
-        print(f"[DEBUG] Filtering DB for classes: {class_list}")
-
-    # Fetch candidate chunks
-    chunks = query.all()
-    print(f"[DEBUG] Candidate chunks retrieved from DB: {len(chunks)}")
-    for c in chunks:
-        print(f"  PDF: {c.pdf_name}, class_name: '{c.class_name}', chunk_index: {c.chunk_index}, embedding length: {len(c.embedding_vector)}")
-
-    if not chunks:
-        print(f"[WARN] No chunks found for classes: {class_list}")
-        return []
-
-    # Embed the query
-    embedding_model = OpenAIEmbeddings()
-    query_vector = embedding_model.embed_query(query_text)
-
-    # Check query_vector dimension
-    print(f"[DEBUG] Query embedding length: {len(query_vector)}")
-
-    # Compute cosine similarity
-    def cosine_sim(a, b):
-        a = np.array(a, dtype=float)
-        b = np.array(b, dtype=float)
-        if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
-            return 0.0
-        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-    scored_chunks = []
-    for chunk in chunks:
-        if len(chunk.embedding_vector) != len(query_vector):
-            print(f"[WARN] Embedding length mismatch for PDF '{chunk.pdf_name}', chunk_index={chunk.chunk_index}")
-            score = 0.0
+    try:
+        if not class_list:
+            query = db.query(Embedding)
         else:
-            score = cosine_sim(chunk.embedding_vector, query_vector)
-        scored_chunks.append((chunk, score))
-        print(f"[DEBUG] Chunk '{chunk.pdf_name}' score: {score}")
+            filters = [
+                func.trim(func.lower(Embedding.class_name)).ilike(f"%{cn.lower().strip()}%")
+                for cn in class_list
+            ]
+            query = db.query(Embedding).filter(or_(*filters))
 
-    # Sort by similarity descending and take top-k
-    scored_chunks.sort(key=lambda x: x[1], reverse=True)
-    top_chunks = scored_chunks[:top_k]
+        chunks = query.all()
+        if not chunks:
+            print(f"[WARN] No chunks found for classes: {class_list}")
+            return []
 
-    print(f"[DEBUG] Top {len(top_chunks)} chunks after similarity sorting:")
-    for idx, (chunk, score) in enumerate(top_chunks):
-        print(f"  {idx+1}: PDF='{chunk.pdf_name}', class='{chunk.class_name}', score={score}, chunk_index={chunk.chunk_index}")
+        # Embed the query
+        embedding_model = OpenAIEmbeddings()
+        query_vector = embedding_model.embed_query(query_text)
 
-    return top_chunks
+        # Compute cosine similarity
+        def cosine_sim(a, b):
+            a = np.array(a, dtype=float)
+            b = np.array(b, dtype=float)
+            if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
+                return 0.0
+            return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+        scored_chunks = []
+        for chunk in chunks:
+            if len(chunk.embedding_vector) != len(query_vector):
+                score = 0.0
+            else:
+                score = cosine_sim(chunk.embedding_vector, query_vector)
+            scored_chunks.append((chunk, score))
+
+        # Sort and take top-k
+        scored_chunks.sort(key=lambda x: x[1], reverse=True)
+        top_chunks = scored_chunks[:top_k]
+
+        print(f"[INFO] Retrieved top {len(top_chunks)} chunks for query.")
+        return top_chunks
+
+    except Exception as e:
+        print(f"[ERROR] get_top_k_chunks_from_db failed: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return []
     
 @app.get("/search")
 async def search_pdfs(
