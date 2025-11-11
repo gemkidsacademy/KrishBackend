@@ -121,8 +121,8 @@ creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPE
 drive_service = build("drive", "v3", credentials=creds)
 
 
-#DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
-DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
+DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
+#DEMO_FOLDER_ID = "1ycoL2ip5sfUxzRzE1k0x-WAAUCHrSToY"
 
 
 
@@ -180,12 +180,13 @@ class Embedding(Base):
     __tablename__ = "embeddings"
 
     id = Column(Integer, primary_key=True)
-    pdf_name = Column(String)
-    class_name = Column(String)
-    chunk_id = Column(String)
-    embedding_vector = Column(Vector(1536))  # text-embedding-3-large has 1536 dims
-    chunk_text = Column(Text)
-    
+    pdf_name = Column(String, nullable=False)
+    class_name = Column(String, nullable=True)
+    chunk_id = Column(String, nullable=False)
+    embedding_vector = Column(VECTOR(1536))  # numeric vector for similarity search
+    chunk_text = Column(Text, nullable=False)
+    page_number = Column(Integer, nullable=False)
+    chunk_index = Column(Integer, nullable=False)    
 
 class GuestChatbotMessage(BaseModel):
     role: str
@@ -1160,40 +1161,36 @@ processed_pdfs = set()
 
 def create_vectorstore_for_pdf(pdf_file):
     """
-    Process a single PDF from Google Drive and create a separate vector store for it in Google Cloud Storage (GCS).
+    Process a single PDF from Google Drive, create embeddings using OpenAI's
+    'text-embedding-3-large', save a FAISS vector store in GCS, and prepare metadata
+    for DB upload with numeric embeddings.
 
-    This function ensures:
-    1. Each PDF gets its own vector store, preserving Google Drive folder structure in GCS.
-    2. PDFs already uploaded and processed are skipped to save time.
-    3. Embeddings are created using OpenAI's 'text-embedding-3-large' model.
-    4. Vector store files are uploaded recursively to GCS.
-    5. Original PDF is also uploaded to GCS.
-    
-    Note:
-    - This does NOT merge PDFs in a folder; each PDF is handled individually.
-    - If a new PDF is added to an existing folder, it will be processed and a new vector store created.
+    Key improvements:
+    1. Metadata always includes pdf_name, page_number, chunk_index, pdf_link, and chunk_text.
+    2. Embeddings are numeric arrays compatible with DB Vector column.
+    3. Empty pages/chunks are skipped with debug logs.
+    4. Optional L2 normalization is consistent.
     """
 
     pdf_name = pdf_file.get("name", "Unknown")
     pdf_id = pdf_file.get("id")
-    pdf_path = pdf_file.get("path", pdf_name)  # preserve folder structure
+    pdf_path = pdf_file.get("path", pdf_name)
     pdf_link = pdf_file.get("webViewLink", "")
 
     print(f"[DEBUG] Starting vector store creation for PDF: {pdf_name}")
 
-    # Skip PDFs with no Google Drive ID
-    if pdf_id is None:
+    # Skip PDFs with no Drive ID
+    if not pdf_id:
         print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
         return
 
-    # Skip PDFs that already exist in GCS
+    # Skip PDFs already in GCS
     if gcs_bucket.blob(pdf_path).exists():
         print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping upload.")
         return
 
-    # Step 1: Download PDF from Drive
+    # Step 1: Download PDF
     try:
-        print(f"[DEBUG] Downloading PDF: {pdf_name}")
         file_bytes = download_pdf(pdf_id)
         reader = PdfReader(io.BytesIO(file_bytes))
     except Exception as e:
@@ -1202,59 +1199,60 @@ def create_vectorstore_for_pdf(pdf_file):
 
     # Step 2: Split PDF into text chunks
     chunks = []
-    for i, page in enumerate(reader.pages, start=1):
+    for page_num, page in enumerate(reader.pages, start=1):
         try:
             page_text = page.extract_text()
-            if page_text and page_text.strip():
-                cleaned_text = " ".join(line.strip() for line in page_text.splitlines() if line.strip())
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=800,
-                    chunk_overlap=250,
-                    separators=["\n\n", "\n", " "]
-                )
-                page_chunks = text_splitter.create_documents([cleaned_text])
+            if not page_text or not page_text.strip():
+                continue
+            cleaned_text = " ".join(line.strip() for line in page_text.splitlines() if line.strip())
 
-                # Add metadata to each chunk
-                for j, chunk in enumerate(page_chunks, start=1):
-                    chunk.metadata.update({
-                        "pdf_name": pdf_name,
-                        "page_number": i,
-                        "chunk_index": j,
-                        "pdf_link": pdf_link
-                    })
-                    chunks.append(chunk)
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=800,
+                chunk_overlap=250,
+                separators=["\n\n", "\n", " "]
+            )
+            page_chunks = text_splitter.create_documents([cleaned_text])
+
+            for chunk_idx, chunk in enumerate(page_chunks, start=1):
+                # Ensure metadata is complete
+                chunk.metadata.update({
+                    "pdf_name": pdf_name,
+                    "page_number": page_num,
+                    "chunk_index": chunk_idx,
+                    "pdf_link": pdf_link,
+                    "chunk_text": chunk.page_content
+                })
+                chunks.append(chunk)
         except Exception as e:
-            print(f"[ERROR] Failed to process page {i} of PDF {pdf_name}: {e}")
+            print(f"[ERROR] Failed to process page {page_num} of PDF {pdf_name}: {e}")
 
     if not chunks:
-        print(f"[DEBUG] No text found in PDF {pdf_name}, skipping vector store creation.")
+        print(f"[DEBUG] No text chunks found in PDF {pdf_name}. Skipping vector store creation.")
         return
 
-    # Step 3: Create embeddings and FAISS vector store
+    # Step 3: Create embeddings
     try:
-        print(f"[DEBUG] Creating embeddings for PDF: {pdf_name}")
-        embeddings = OpenAIEmbeddings(
+        embeddings_model = OpenAIEmbeddings(
             model="text-embedding-3-large",
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
-        vs = FAISS.from_documents(chunks, embeddings)
+        vs = FAISS.from_documents(chunks, embeddings_model)
+
         if hasattr(vs.index, "normalize_L2"):
-            vs.index.normalize_L2()  # optional: make cosine similarity scores accurate
+            vs.index.normalize_L2()  # optional: consistent similarity
         print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
     except Exception as e:
         print(f"[ERROR] Failed to create embeddings/vector store for PDF {pdf_name}: {e}")
         return
 
-    # Step 4: Save vector store recursively to GCS
-    # Step 4: Save vector store recursively to GCS
+    # Step 4: Save vector store to GCS
     try:
         pdf_base_name = pdf_name.rsplit('.', 1)[0]
-        gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore_{pdf_base_name}/"  # unique per PDF
-    
+        gcs_prefix_vs = f"{os.path.dirname(pdf_path)}/vectorstore_{pdf_base_name}/"
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             vs.save_local(tmp_dir)
-    
-            # Recursively upload all vector store files
+
             for root, dirs, files in os.walk(tmp_dir):
                 for filename in files:
                     path = os.path.join(root, filename)
@@ -1262,7 +1260,6 @@ def create_vectorstore_for_pdf(pdf_file):
                     blob_name = f"{gcs_prefix_vs}{relative_path.replace(os.sep, '/')}"
                     upload_to_gcs(open(path, "rb").read(), blob_name)
                     print(f"[DEBUG] Uploaded vector store file to GCS: {blob_name}")
-    
     except Exception as e:
         print(f"[ERROR] Failed to upload vector store for PDF {pdf_name} to GCS: {e}")
         return
@@ -1622,49 +1619,87 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
         print(f"[INFO] API usage logged in database for user_id={user_id}")
 
     return is_educational
+    
 def get_top_k_chunks_from_db(query_text: str, class_names: list, db: Session, top_k: int = 5):
-    import os, json, numpy as np
+    """
+    Retrieve top-k most similar PDF chunks from the embeddings table using cosine similarity.
+
+    Args:
+        query_text (str): User query.
+        class_names (list): Optional list of class_name strings to filter PDFs.
+        db (Session): SQLAlchemy session.
+        top_k (int): Number of top chunks to return.
+
+    Returns:
+        List of tuples: (Embedding instance, similarity score)
+    """
+    import numpy as np
     from langchain.embeddings import OpenAIEmbeddings
 
-    # Initialize embeddings model
-    embeddings_model = OpenAIEmbeddings(
-        model="text-embedding-3-large",
-        openai_api_key=os.environ.get("OPENAI_API_KEY_S")
-    )
+    print("\n[DEBUG] ===== Starting get_top_k_chunks_from_db =====")
+    print(f"[DEBUG] Query text: {query_text}")
+    print(f"[DEBUG] Class names filter: {class_names}")
+    print(f"[DEBUG] Requested top_k: {top_k}")
 
-    # Embed the query
-    query_vector = embeddings_model.embed_query(query_text)
-    query_vec = np.array(query_vector)
-    query_vec_norm = query_vec / (np.linalg.norm(query_vec) + 1e-10)  # safe normalization
-
-    # Fetch embeddings from DB
-    q = db.query(Embedding)
-    if class_names:
-        q = q.filter(Embedding.class_name.in_(class_names))
-    all_embeddings = q.all()
-    if not all_embeddings:
+    # Step 1: Embed the query
+    try:
+        embeddings_model = OpenAIEmbeddings(
+            model="text-embedding-3-large",
+            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+        )
+        query_vector = np.array(embeddings_model.embed_query(query_text), dtype=np.float32)
+        query_vector_norm = query_vector / (np.linalg.norm(query_vector) + 1e-10)
+        print(f"[DEBUG] Query embedding generated successfully. Vector shape: {query_vector_norm.shape}")
+    except Exception as e:
+        print(f"[ERROR] Failed to embed query: {e}")
         return []
 
-    # Load vectors and corresponding docs
+    # Step 2: Fetch embeddings from DB
+    try:
+        q = db.query(Embedding)
+        if class_names:
+            q = q.filter(Embedding.class_name.in_(class_names))
+        all_embeddings = q.all()
+        print(f"[DEBUG] Retrieved {len(all_embeddings)} embeddings from DB")
+        if not all_embeddings:
+            print("[DEBUG] No embeddings found in DB. Returning empty list.")
+            return []
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch embeddings from DB: {e}")
+        return []
+
+    # Step 3: Convert embeddings to numpy arrays
     vectors = []
     docs = []
-    for emb in all_embeddings:
-        vectors.append(np.array(json.loads(emb.embedding_vector)))
-        docs.append(emb)
-
+    for idx, emb in enumerate(all_embeddings, start=1):
+        try:
+            vec = np.array(emb.embedding_vector, dtype=np.float32)
+            vectors.append(vec)
+            docs.append(emb)
+        except Exception as e:
+            print(f"[WARNING] Failed to process embedding #{idx} (PDF: {emb.pdf_name}, chunk_id: {emb.chunk_id}): {e}")
     vectors = np.stack(vectors)
     vectors_norm = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-10)
+    print(f"[DEBUG] Normalized all embeddings. Shape: {vectors_norm.shape}")
 
-    # Compute cosine similarity
-    sims = vectors_norm @ query_vec_norm
+    # Step 4: Compute cosine similarity
+    try:
+        sims = vectors_norm @ query_vector_norm
+        print(f"[DEBUG] Cosine similarity computed. Sample scores: {sims[:5]}")
+    except Exception as e:
+        print(f"[ERROR] Failed to compute cosine similarity: {e}")
+        return []
 
-    # Handle top_k greater than available embeddings
+    # Step 5: Get top-k results
     top_k = min(top_k, len(all_embeddings))
     top_indices = sims.argsort()[-top_k:][::-1]
-
-    # Return tuples of (doc, score) to match your current usage
     top_chunks = [(docs[i], float(sims[i])) for i in top_indices]
 
+    print(f"[DEBUG] Top {top_k} chunks selected:")
+    for rank, (doc, score) in enumerate(top_chunks, start=1):
+        print(f"  [RANK {rank}] PDF: {doc.pdf_name}, Chunk ID: {doc.chunk_id}, Score: {score:.4f}, Page: {doc.page_number}, Chunk Index: {doc.chunk_index}")
+
+    print("[DEBUG] ===== Finished get_top_k_chunks_from_db =====\n")
     return top_chunks
 
 
@@ -2241,6 +2276,36 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         traceback.print_exc()
         raise
 
+@app.post("/admin/create_vectorstores")
+async def create_vectorstores():
+    print("[DEBUG] ===== Starting vector store processing =====")
+
+    try:
+        # Step 1: List all PDFs in the folder
+        print(f"[DEBUG] Calling list_pdfs with DEMO_FOLDER_ID: {DEMO_FOLDER_ID}")
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        print(f"[DEBUG] list_pdfs returned {len(all_pdfs)} PDFs:")
+        for idx, pdf in enumerate(all_pdfs, start=1):
+            print(f"    [{idx}] {pdf}")
+
+        # Step 2: Ensure vector stores exist for all PDFs
+        print("[DEBUG] Calling ensure_vectorstores_for_all_pdfs with all_pdfs")
+        ensure_vectorstores_for_all_pdfs(all_pdfs)
+        print("[DEBUG] ensure_vectorstores_for_all_pdfs completed successfully")
+
+        print("[DEBUG] ===== Vector store processing finished successfully =====")
+        return JSONResponse(
+            status_code=200,
+            content={"message": "Vector stores processed successfully!"}
+        )
+
+    except Exception as e:
+        print(f"[ERROR] An exception occurred during vector store processing: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"message": "An error occurred during vector store processing."}
+        )
+
 
 # ---------- Bulk upload embeddings endpoint ----------
 # ---------- Bulk upload embeddings endpoint (updated) ----------
@@ -2248,7 +2313,7 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
     Loads FAISS vector stores for all PDFs from GCS in memory and inserts embeddings
-    and chunk text into the DB, avoiding duplicates.
+    and chunk text into the DB, avoiding duplicates. Embeddings are stored as numeric arrays.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
     total_uploaded = 0
@@ -2267,7 +2332,6 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
 
-
         # Step 1: Process vector stores
         for pdf_idx, pdf in enumerate(all_pdfs, start=1):
             pdf_name = pdf.get("name")
@@ -2277,7 +2341,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             gcs_prefix = os.path.join(parent_folder, f"vectorstore_{pdf_base_name}") + "/"
 
             print(f"\n[DEBUG] Processing PDF {pdf_idx}/{len(all_pdfs)}: {pdf_name}")
-            print(f"[DEBUG] Looking for vector store in GCS: {gcs_prefix}")
+            print(f"[DEBUG] Loading vector store from GCS: {gcs_prefix}")
 
             try:
                 vs = load_vectorstore_from_gcs_in_memory(gcs_prefix, embeddings_model)
@@ -2295,17 +2359,17 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
             uploaded_this_pdf = 0
             for doc_id, doc in docstore_items:
+                # Extract metadata and chunk content
+                metadata = getattr(doc, "metadata", {}) or {}
+                chunk_text = metadata.get("chunk_text") or getattr(doc, "page_content", None) or ""
+                class_name = metadata.get("class_name")
+
                 try:
                     internal_id = vs.index_to_docstore_id_inverse[doc_id]
-                    embedding_vector = vs.index.reconstruct(internal_id).tolist()
+                    embedding_vector = vs.index.reconstruct(internal_id).tolist()  # numeric array
                 except Exception as e:
                     print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
                     continue
-
-                # Safe metadata extraction
-                metadata = getattr(doc, "metadata", {})
-                class_name = metadata.get("class_name") if metadata else None
-                chunk_text = getattr(doc, "page_content", None) or getattr(doc, "text", None) or ""
 
                 # Skip duplicates
                 existing = db.query(Embedding).filter_by(
@@ -2315,19 +2379,16 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 if existing:
                     total_skipped += 1
                     continue
-                
-                # Sanitize chunk_text to remove NUL characters
-                safe_chunk_text = getattr(doc, "chunk_text", "").replace("\x00", "")
-                
+
+                # Create numeric embedding entry
                 new_embedding = Embedding(
                     pdf_name=pdf_name,
                     class_name=class_name,
                     chunk_id=doc_id,
-                    embedding_vector=embedding_vector,  # ✅ directly as numeric array
-                    chunk_text=safe_chunk_text
+                    embedding_vector=embedding_vector,  # ✅ numeric array
+                    chunk_text=chunk_text
                 )
                 db.add(new_embedding)
-                                
                 total_uploaded += 1
                 uploaded_this_pdf += 1
 
@@ -2335,7 +2396,8 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                     print(f"[DEBUG] Uploaded {uploaded_this_pdf} embeddings for PDF '{pdf_name}' so far...")
 
             db.commit()
-            print(f"[DEBUG] PDF '{pdf_name}': Uploaded {uploaded_this_pdf} embeddings. Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
+            print(f"[DEBUG] PDF '{pdf_name}': Uploaded {uploaded_this_pdf} embeddings. "
+                  f"Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
 
         print(f"\n[DEBUG] Completed upload. Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
         return {
@@ -2346,6 +2408,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         db.rollback()
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+
 
 
 
