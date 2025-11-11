@@ -1990,7 +1990,6 @@ Guidelines:
 # Utility: hash password
 
 # Bulk upload endpoint
-
 def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
     Loads a FAISS vector store from GCS directly into memory without creating local temp files.
@@ -2026,9 +2025,31 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         if not index_file or not docstore_file:
             raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'.")
 
-        
-        index_buffer = io.BytesIO(index_file)
-        index = faiss.read_index(index_buffer)
+        # ------------------------------
+        # Create in-memory IOReader for FAISS
+        # ------------------------------
+        class BytesIOReader(faiss.IOReader):
+            def __init__(self, b: bytes):
+                super().__init__()
+                self.buf = b
+                self.pos = 0
+            def read(self, n: int) -> bytes:
+                data = self.buf[self.pos:self.pos+n]
+                self.pos += len(data)
+                return data
+            def seek(self, pos: int, whence: int = 0):
+                if whence == 0:  # from start
+                    self.pos = pos
+                elif whence == 1:  # from current
+                    self.pos += pos
+                elif whence == 2:  # from end
+                    self.pos = len(self.buf) + pos
+                return self.pos
+            def tell(self) -> int:
+                return self.pos
+
+        reader = BytesIOReader(index_file)
+        index = faiss.read_index(reader)
 
         # Load docstore from bytes
         docstore = pickle.loads(docstore_file)
@@ -2047,6 +2068,7 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         print(f"[ERROR][GCS-LOAD] Exception: {type(e).__name__} - {e}")
         traceback.print_exc()
         raise
+
 
 
 @app.post("/admin/upload_embeddings_to_db")
