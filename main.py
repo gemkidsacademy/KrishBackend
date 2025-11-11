@@ -1992,7 +1992,7 @@ Guidelines:
 # Bulk upload endpoint
 def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
-    Load a FAISS vector store from GCS directly into memory.
+    Load a FAISS vector store from GCS directly into memory using PyCallbackIOReader.
 
     Args:
         gcs_prefix (str): The GCS prefix/folder where the FAISS index and docstore are stored.
@@ -2031,9 +2031,10 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         if not index_bytes or not docstore_bytes:
             raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'.")
 
-        # --- Load FAISS index from bytes ---
-        index_buffer = io.BytesIO(index_bytes)
-        index = faiss.read_index(index_buffer.getbuffer())
+        # --- Load FAISS index fully in-memory using PyCallbackIOReader ---
+        bio = io.BytesIO(index_bytes)
+        reader = faiss.PyCallbackIOReader(bio.read)
+        index = faiss.read_index(reader)
         print("[DEBUG][GCS-LOAD] FAISS index loaded into memory.")
 
         # --- Load docstore from bytes ---
