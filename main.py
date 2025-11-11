@@ -1992,7 +1992,7 @@ Guidelines:
 # Bulk upload endpoint
 def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
-    Loads a FAISS vector store from GCS directly into memory without creating local temp files.
+    Loads a FAISS vector store from GCS directly into memory using a temporary file.
 
     Args:
         gcs_prefix (str): The folder/prefix in GCS where the vector store files are located.
@@ -2013,46 +2013,26 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         if not blobs:
             raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'.")
 
-        # Load FAISS index and docstore from memory buffers
-        index_file = None
-        docstore_file = None
+        # Identify the index and docstore files
+        index_file_bytes = None
+        docstore_file_bytes = None
         for blob in blobs:
             if blob.name.endswith(".faiss"):
-                index_file = blob.download_as_bytes()
+                index_file_bytes = blob.download_as_bytes()
             elif blob.name.endswith(".pkl"):
-                docstore_file = blob.download_as_bytes()
+                docstore_file_bytes = blob.download_as_bytes()
 
-        if not index_file or not docstore_file:
+        if not index_file_bytes or not docstore_file_bytes:
             raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'.")
 
-        # ------------------------------
-        # Create in-memory IOReader for FAISS
-        # ------------------------------
-        class BytesIOReader(faiss.IOReader):
-            def __init__(self, b: bytes):
-                super().__init__()
-                self.buf = b
-                self.pos = 0
-            def read(self, n: int) -> bytes:
-                data = self.buf[self.pos:self.pos+n]
-                self.pos += len(data)
-                return data
-            def seek(self, pos: int, whence: int = 0):
-                if whence == 0:  # from start
-                    self.pos = pos
-                elif whence == 1:  # from current
-                    self.pos += pos
-                elif whence == 2:  # from end
-                    self.pos = len(self.buf) + pos
-                return self.pos
-            def tell(self) -> int:
-                return self.pos
-
-        reader = BytesIOReader(index_file)
-        index = faiss.read_index(reader)
+        # --- Load FAISS index using temporary file ---
+        with tempfile.NamedTemporaryFile() as tmp_index_file:
+            tmp_index_file.write(index_file_bytes)
+            tmp_index_file.flush()
+            index = faiss.read_index(tmp_index_file.name)
 
         # Load docstore from bytes
-        docstore = pickle.loads(docstore_file)
+        docstore = pickle.loads(docstore_file_bytes)
 
         # Construct FAISS object
         vs = FAISS(embedding_function=embeddings, index=index)
