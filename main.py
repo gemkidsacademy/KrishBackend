@@ -2050,7 +2050,6 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         raise
 
 
-
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
@@ -2100,7 +2099,6 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             # -------------------------
             # Step 2: Iterate over FAISS docs
             # -------------------------
-            # Handle InMemoryDocstore properly
             docstore_items = []
             if hasattr(vs.docstore, "dict"):  # InMemoryDocstore has .dict attribute
                 docstore_items = vs.docstore.dict.items()
@@ -2146,6 +2144,8 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         db.rollback()
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+
+
         
 
 @app.post("/admin/create_vectorstores")
