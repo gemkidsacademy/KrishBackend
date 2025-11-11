@@ -1992,7 +1992,7 @@ Guidelines:
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
-    Reads vector store PKL files from Google Cloud Storage for each PDF
+    Reads vector store files (JSON or PKL/FAISS) from Google Cloud Storage for each PDF
     and uploads embeddings to the Railway DB table, avoiding duplicates.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
@@ -2002,13 +2002,13 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
     try:
         # -------------------------
-        # Step 0: Populate all_pdfs
+        # Step 0: Fetch PDFs from Google Drive
         # -------------------------
         print("[DEBUG] Fetching PDF list from Google Drive...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
 
         if not all_pdfs:
-            raise HTTPException(status_code=404, detail="No PDFs found in Google Drive to process vector stores.")
+            raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
         # -------------------------
@@ -2027,73 +2027,103 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             print(f"[DEBUG] Looking for vector store folder in GCS: {vectorstore_prefix}")
 
             blobs = list(gcs_bucket.list_blobs(prefix=vectorstore_prefix))
-            print(f"[DEBUG] Number of files found in vector store folder: {len(blobs)}")
-
             if not blobs:
                 print(f"[WARNING] No vector store files found for PDF: {pdf_name}")
                 continue
+            print(f"[DEBUG] Found {len(blobs)} files in vector store folder.")
 
             for blob_idx, blob in enumerate(blobs, start=1):
                 print(f"[DEBUG] Checking blob {blob_idx}/{len(blobs)}: {blob.name}")
-                
-                if not blob.name.endswith(".pkl"):
-                    print(f"[DEBUG] Skipping non-PKL blob: {blob.name}")
-                    continue
 
-                print(f"[DEBUG] Downloading PKL blob: {blob.name}")
-                data_bytes = blob.download_as_bytes()
-                
-                try:
-                    vector_data = pickle.loads(data_bytes)
-                except Exception as e:
-                    print(f"[ERROR] Failed to load PKL from blob {blob.name}: {e}")
-                    continue
-
-                print(f"[DEBUG] Number of vector chunks in PKL blob: {len(vector_data)}")
-
-                for chunk_idx, item in enumerate(vector_data, start=1):
-                    embedding_vector = item.get("embedding")
-                    if embedding_vector is None:
-                        print(f"[WARNING] Skipping chunk {chunk_idx} without embedding: {item}")
+                if blob.name.endswith(".json"):
+                    print(f"[DEBUG] Processing JSON blob: {blob.name}")
+                    data = blob.download_as_text()
+                    try:
+                        vector_data = json.loads(data)
+                    except json.JSONDecodeError as e:
+                        print(f"[ERROR] Failed to parse JSON from blob {blob.name}: {e}")
                         continue
 
-                    # -------------------------
-                    # Check if embedding already exists
-                    # -------------------------
-                    existing = db.query(Embedding).filter_by(
-                        pdf_name=item.get("pdf_name"),
-                        chunk_id=item.get("chunk_id")
-                    ).first()
+                    for chunk_idx, item in enumerate(vector_data, start=1):
+                        embedding_vector = item.get("embedding")
+                        if embedding_vector is None:
+                            print(f"[WARNING] Skipping chunk {chunk_idx} without embedding")
+                            continue
 
-                    if existing:
-                        print(f"[INFO] Skipping existing embedding chunk {chunk_idx} from blob {blob.name}")
-                        total_skipped += 1
+                        # Check duplicates
+                        existing = db.query(Embedding).filter_by(
+                            pdf_name=item.get("pdf_name"),
+                            chunk_id=item.get("chunk_id")
+                        ).first()
+                        if existing:
+                            total_skipped += 1
+                            continue
+
+                        embedding_str = json.dumps(embedding_vector)
+                        new_embedding = Embedding(
+                            pdf_name=item.get("pdf_name"),
+                            class_name=item.get("class_name"),
+                            chunk_id=item.get("chunk_id"),
+                            embedding_vector=embedding_str
+                        )
+                        db.add(new_embedding)
+                        total_uploaded += 1
+
+                elif blob.name.endswith(".pkl"):
+                    print(f"[DEBUG] Downloading PKL blob: {blob.name}")
+                    data_bytes = blob.download_as_bytes()
+                    try:
+                        vectorstore = pickle.loads(data_bytes)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to load pickle {blob.name}: {e}")
                         continue
 
-                    embedding_str = json.dumps(embedding_vector)
+                    # Ensure it's a FAISS vectorstore
+                    if isinstance(vectorstore, FAISS):
+                        docstore = vectorstore.docstore
+                        index = vectorstore.index
 
-                    new_embedding = Embedding(
-                        pdf_name=item.get("pdf_name"),
-                        class_name=item.get("class_name"),
-                        chunk_id=item.get("chunk_id"),
-                        embedding_vector=embedding_str
-                    )
-                    db.add(new_embedding)
-                    total_uploaded += 1
-                    print(f"[DEBUG] Uploaded new embedding chunk {chunk_idx} from blob {blob.name}")
+                        for doc_id, doc in docstore._dict.items():
+                            # Reconstruct embedding
+                            try:
+                                embedding_vector = index.reconstruct(int(doc_id))
+                            except Exception as e:
+                                print(f"[ERROR] Failed to reconstruct vector for doc_id {doc_id}: {e}")
+                                continue
+
+                            pdf_name_meta = doc.metadata.get("pdf_name", pdf_name)
+                            class_name_meta = doc.metadata.get("class_name", None)
+                            chunk_id_meta = doc.metadata.get("chunk_id", doc_id)
+
+                            # Check duplicates
+                            existing = db.query(Embedding).filter_by(
+                                pdf_name=pdf_name_meta,
+                                chunk_id=chunk_id_meta
+                            ).first()
+                            if existing:
+                                total_skipped += 1
+                                continue
+
+                            new_embedding = Embedding(
+                                pdf_name=pdf_name_meta,
+                                class_name=class_name_meta,
+                                chunk_id=chunk_id_meta,
+                                embedding_vector=json.dumps(embedding_vector.tolist())
+                            )
+                            db.add(new_embedding)
+                            total_uploaded += 1
+
+                    else:
+                        print(f"[WARNING] Unknown vectorstore type in pickle: {type(vectorstore)}. Skipping.")
 
         db.commit()
-        print(f"\n[DEBUG] Successfully uploaded {total_uploaded} new embeddings to DB")
-        print(f"[DEBUG] Skipped {total_skipped} embeddings already existing in DB")
-        return {
-            "message": f"Uploaded {total_uploaded} new embeddings. Skipped {total_skipped} duplicates."
-        }
+        print(f"\n[DEBUG] Uploaded {total_uploaded} new embeddings, skipped {total_skipped} duplicates.")
+        return {"message": f"Uploaded {total_uploaded} new embeddings. Skipped {total_skipped} duplicates."}
 
     except Exception as e:
         db.rollback()
-        print(f"[ERROR] Failed to upload embeddings: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
-
+        print(f"[ERROR] Failed to upload embeddings: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {e}")
 
 
 
