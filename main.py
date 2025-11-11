@@ -1619,6 +1619,38 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
 
     return is_educational
 
+def get_top_k_chunks_from_db(query_text: str, class_names: list, db: Session, top_k: int = 5):
+    embeddings_model = OpenAIEmbeddings(
+        model="text-embedding-3-large",
+        openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+    )
+    query_vector = embeddings_model.embed_query(query_text)
+
+    # Filter embeddings by class_name if provided
+    q = db.query(Embedding)
+    if class_names:
+        q = q.filter(Embedding.class_name.in_(class_names))
+    all_embeddings = q.all()
+    if not all_embeddings:
+        return []
+
+    vectors = []
+    docs = []
+    for emb in all_embeddings:
+        vectors.append(np.array(json.loads(emb.embedding_vector)))
+        docs.append(emb)
+
+    vectors = np.stack(vectors)
+    
+    # Cosine similarity
+    query_vec = np.array(query_vector)
+    vectors_norm = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+    query_vec_norm = query_vec / np.linalg.norm(query_vec)
+    sims = vectors_norm @ query_vec_norm
+
+    top_indices = sims.argsort()[-top_k:][::-1]
+    top_chunks = [(docs[i], float(sims[i])) for i in top_indices]
+    return top_chunks
     
 
     
@@ -1815,50 +1847,19 @@ async def search_pdfs(
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
     if pdf_files and not use_context_only:
-        print(f"[DEBUG] Starting PDF similarity search for {len(pdf_files)} PDFs")
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-large",
-            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
-        )
-
-        rewritten_query = query
-        for pdf in pdf_files:
-            pdf_name = pdf["name"]
-            pdf_base_name = pdf_name.rsplit(".", 1)[0]
-            gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), f"vectorstore_{pdf_base_name}") + "/"
-            print(f"[DEBUG] Loading vectorstore from GCS for PDF: {pdf_name}, prefix: {gcs_prefix}")
-
-            try:
-                cache_key = f"{user_id}:{os.path.dirname(pdf['path'])}:{pdf_base_name}"
-                  # or something like f"{user_id}:{pdf_base_name}"
-
-                if cache_key not in cached_vectorstores:
-                    print(f"[INFO] Loading vectorstore from GCS: {gcs_prefix}")
-                    vectorstore = get_vectorstore_from_cache(gcs_prefix, embeddings)
-                    cached_vectorstores[cache_key] = vectorstore
-                else:
-                    vectorstore = cached_vectorstores[cache_key]
-                    print(f"[INFO] Using cached vectorstore: {gcs_prefix}")
-
-                print(f"[DEBUG] Vectorstore loaded for PDF: {pdf_name}")
-            except Exception as e:
-                print(f"[ERROR] Failed to load vectorstore for {pdf_name}: {e}")
-                continue
-
-            if hasattr(vectorstore, "index") and hasattr(vectorstore.index, "normalize_L2"):
-                vectorstore.index.normalize_L2()
-                print(f"[DEBUG] Normalized L2 for vectorstore: {pdf_name}")
-
-            try:
-                docs_with_scores = vectorstore.similarity_search_with_score(rewritten_query, k=TOP_K)
-                print(f"[DEBUG] Found {len(docs_with_scores)} chunks for PDF: {pdf_name}")
-                for doc, score in docs_with_scores:
-                    doc.metadata["pdf_name"] = pdf_name
-                    doc.metadata["pdf_base_name"] = pdf_base_name
-                    top_chunks.append((doc, score))
-                    print(f"[DEBUG] Chunk score: {score}, Page: {doc.metadata.get('page_number', 'N/A')}, Snippet: {doc.page_content[:80]}...")
-            except Exception as e:
-                print(f"[ERROR] Similarity search failed for PDF {pdf_name}: {e}")
+        class_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
+        top_chunks = get_top_k_chunks_from_db(query, class_list, db, top_k=TOP_K)
+        
+        if top_chunks:
+            print(f"[DEBUG] Found {len(top_chunks)} chunks from DB")
+            context_texts = [
+                f"PDF: {doc.pdf_name} (Chunk {doc.chunk_id})\n{doc.chunk_text}"
+                for doc, _ in top_chunks
+            ]
+            context_texts_str = "\n".join(context_texts)
+        else:
+            print(f"[DEBUG] No top chunks found in DB, GPT will rely on context only")
+            use_context_only = True
 
         # Sort top_chunks by score (descending = most relevant first)
         top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
