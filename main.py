@@ -2052,7 +2052,7 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         traceback.print_exc()
         raise
 
-@app.get("/admin/initialize_faiss")
+@app.post("/admin/initialize_faiss")
 def initialize_faiss(db: Session = Depends(get_db)):
     all_embeddings = db.query(Embedding).all()
     
