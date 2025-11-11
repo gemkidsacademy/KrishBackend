@@ -1747,6 +1747,10 @@ async def search_pdfs(
     print(f"[DEBUG] PDFs matching classes {class_names}: {len(pdf_files)}")
     for pdf in pdf_files:
         print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")    
+    print(f"[DEBUG] class_names passed from query: {class_name}")
+    print(f"[DEBUG] PDF paths lowercased for comparison: {[pdf.get('path','').lower() for pdf in all_pdfs]}")
+
+        
         query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
 
     
@@ -1848,6 +1852,14 @@ async def search_pdfs(
     context_texts_str = ""
     if pdf_files and not use_context_only:
         class_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
+        print(f"[DEBUG] Query: {query}")
+        print(f"[DEBUG] Class list for DB lookup: {class_list}")
+        print(f"[DEBUG] Attempting to fetch top {TOP_K} chunks from DB")
+         # ===== DEBUG: Inspect first 10 entries in the embeddings table =====
+        db_chunks = db.query(PDFChunkTable).limit(10).all()
+        for i, c in enumerate(db_chunks):
+            print(f"[DEBUG] DB row {i+1}: pdf_name={c.pdf_name}, class_name={c.class_name}, chunk_id={c.chunk_id}")
+
         top_chunks = get_top_k_chunks_from_db(query, class_list, db, top_k=TOP_K)
         
         if top_chunks:
@@ -1860,10 +1872,16 @@ async def search_pdfs(
         else:
             print(f"[DEBUG] No top chunks found in DB, GPT will rely on context only")
             use_context_only = True
+        for idx, (doc, score) in enumerate(top_chunks[:5]):  # show first 5 for brevity
+            print(f"[DEBUG] Chunk {idx+1}: pdf_name={getattr(doc, 'pdf_name', 'N/A')}, score={score}, text_preview={getattr(doc,'chunk_text','')[:100]}")
+
 
         # Sort top_chunks by score (descending = most relevant first)
         top_chunks = sorted(top_chunks, key=lambda x: x[1])[:TOP_K]
         print(f"[DEBUG] Total top chunks after sorting: {len(top_chunks)}")
+        for idx, (doc, score) in enumerate(top_chunks):
+            print(f"[DEBUG] Sorted Chunk {idx+1}: pdf_name={doc.metadata.get('pdf_name')}, page={doc.metadata.get('page_number')}, score={score}, snippet={doc.page_content[:100]}")
+
 
         if top_chunks:
             context_texts = [
@@ -1882,6 +1900,10 @@ async def search_pdfs(
         "medium": "Give a balanced explanation — clear, moderately detailed, and easy to follow.",
         "advanced": "Provide a detailed, analytical, and example-rich explanation that shows expert understanding."
     }.get(reasoning, "Use plain, beginner-friendly language.")
+
+    print(f"[DEBUG] use_context_only={use_context_only}, len(top_chunks)={len(top_chunks) if top_chunks else 0}")
+    print(f"[DEBUG] Length of context_texts_str: {len(context_texts_str)}")
+
 
     if use_context_only or not top_chunks:
         print("[INFO] GPT will rely on context or external knowledge ONLY")
@@ -1929,6 +1951,9 @@ Guidelines:
     print("[DEBUG] GPT PROMPT PREVIEW (first 500 chars):", gpt_prompt[:500])
 
     # -------------------- Step 4: Call GPT --------------------
+    print(f"[DEBUG] GPT prompt length: {len(gpt_prompt)} chars")
+    print(f"[DEBUG] First 500 chars of GPT prompt:\n{gpt_prompt[:500]}")
+
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
