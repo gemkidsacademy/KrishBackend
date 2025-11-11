@@ -1902,6 +1902,18 @@ async def search_pdfs(
     
         # Fetch top-k chunks from embeddings table using similarity search
         top_chunks = get_top_k_chunks_from_db(query, class_list, db=db, top_k=TOP_K)
+        # Extra check: compare class_list vs actual PDF names in DB
+        pdf_names_in_db = [doc.metadata.get('pdf_name', 'N/A') for doc, _ in top_chunks]
+        for cn in class_list:
+            matched = [name for name in pdf_names_in_db if cn in name.lower()]
+            if matched:
+                print(f"[DEBUG] Class '{cn}' matched PDFs: {matched}")
+            else:
+                print(f"[WARN] Class '{cn}' did NOT match any PDFs in DB. Check lowercase/uppercase or naming issues!")
+        
+        # Additionally, print all PDF names for visibility
+        print(f"[DEBUG] All PDF names retrieved from DB: {pdf_names_in_db}")
+
         print(f"[DEBUG] top_chunks returned from DB: {len(top_chunks)}")
     
         if top_chunks:
