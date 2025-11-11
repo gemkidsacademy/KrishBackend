@@ -12,6 +12,7 @@ from pgvector.sqlalchemy import Vector
 
 
 
+
 import numpy as np
 
 
@@ -115,6 +116,18 @@ app.add_middleware(
 openai_client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY_S")
 )
+
+# 1. Fetch all embeddings from Postgres
+all_embeddings = db.query(Embedding).all()
+vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
+metadata = [{"pdf_name": e.pdf_name, "class_name": e.class_name, "chunk_index": e.chunk_index, ...} for e in all_embeddings]
+
+# 2. Build FAISS index
+d = vectors.shape[1]  # embedding dimension, e.g., 3072
+index = faiss.IndexFlatIP(d)  # IP = inner product (for cosine similarity)
+faiss.normalize_L2(vectors)    # normalize for cosine similarity
+index.add(vectors)
+
 
 # -----------------------------
 # Google Drive Setup
@@ -1633,369 +1646,195 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
 
     return is_educational
 
-def get_top_k_chunks_from_db(query_text: str, class_list: list, db: Session, top_k: int = 5):
+
+embedding_model = OpenAIEmbeddings(model="text-embedding-3-large")
+
+def search_top_k(query_text: str, top_k: int = 5, class_filter: list = None):
     """
-    Retrieve top-k PDF chunks from the DB using similarity search.
+    Perform fast similarity search in-memory using FAISS.
+
+    Args:
+        query_text (str): User query.
+        top_k (int): Number of results to return.
+        class_filter (list): Optional list of class_names to filter results.
+
+    Returns:
+        List of metadata dicts with pdf_name, class_name, chunk_index, similarity score.
     """
-    try:
-        if not class_list:
-            query = db.query(Embedding)
-        else:
-            filters = [
-                func.trim(func.lower(Embedding.class_name)).ilike(f"%{cn.lower().strip()}%")
-                for cn in class_list
-            ]
-            query = db.query(Embedding).filter(or_(*filters))
+    # 1. Embed the query
+    query_vector = embedding_model.embed_query(query_text)
+    query_vector = np.array([query_vector], dtype='float32')
+    faiss.normalize_L2(query_vector)
 
-        chunks = query.all()
-        if not chunks:
-            print(f"[WARN] No chunks found for classes: {class_list}")
-            return []
+    # 2. Search FAISS
+    distances, indices = index.search(query_vector, top_k * 3)  # search more if you plan to filter by class
 
-        # Embed the query
-        embedding_model = OpenAIEmbeddings()
-        query_vector = embedding_model.embed_query(query_text)
+    # 3. Map to metadata and optionally filter by class
+    results = []
+    for i, score in zip(indices[0], distances[0]):
+        meta = metadata[i]
+        if class_filter:
+            if not any(cf.lower().strip() in meta['class_name'].lower() for cf in class_filter):
+                continue
+        results.append({**meta, "score": float(score)})
+        if len(results) >= top_k:
+            break
 
-        # Compute cosine similarity
-        def cosine_sim(a, b):
-            a = np.array(a, dtype=float)
-            b = np.array(b, dtype=float)
-            if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
-                return 0.0
-            return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-        scored_chunks = []
-        for chunk in chunks:
-            if len(chunk.embedding_vector) != len(query_vector):
-                score = 0.0
-            else:
-                score = cosine_sim(chunk.embedding_vector, query_vector)
-            scored_chunks.append((chunk, score))
-
-        # Sort and take top-k
-        scored_chunks.sort(key=lambda x: x[1], reverse=True)
-        top_chunks = scored_chunks[:top_k]
-
-        print(f"[INFO] Retrieved top {len(top_chunks)} chunks for query.")
-        return top_chunks
-
-    except Exception as e:
-        print(f"[ERROR] get_top_k_chunks_from_db failed: {e}")
-        import traceback
-        print(traceback.format_exc())
-        return []
+    return results
     
+
 @app.get("/search")
 async def search_pdfs(
     query: str,
     reasoning: str,
     user_id: str,
     class_name: str = None,
-    db: Session = Depends(get_db)  # <-- inject database session
+    db: Session = Depends(get_db)
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
-    results, top_chunks = [], []
-    # ------------------ Step 0: Check interaction limit ------------------
-    # Ensure the global user_contexts dictionary exists for the user
-    global user_contexts
-    
-    # Initialize context for new users to avoid KeyError
-    user_contexts.setdefault(user_id, [])
-    
-    # Each interaction counts as a pair (user + assistant)
-    interaction_count = len(user_contexts[user_id]) // 2
-    
-    # Enforce maximum interaction limit
-    if interaction_count >= MAX_INTERACTIONS:
-        print(f"[WARN] User {user_id} exceeded max interactions ({MAX_INTERACTIONS})")
-        results = [{
-            "name": "**Academy Answer**",
-            "snippet": (
-                f"You have reached the maximum of {MAX_INTERACTIONS} interactions. "
-                "Please contact support for further queries."
-            ),
-            "links": []
-        }]
-        return JSONResponse(results)
 
-     # ------------------ Step 0: Check if query is educational ------------------
+    results = []
+    top_chunks = []
+    answer_text = ""  # initialize here to append PDF metadata later
+    global user_contexts, user_vectorstores_initialized, pdf_listing_done, all_pdfs
+
+    # ------------------ Step 0: Interaction limit ------------------
+    user_contexts.setdefault(user_id, [])
+    interaction_count = len(user_contexts[user_id]) // 2
+
+    if interaction_count >= MAX_INTERACTIONS:
+        return JSONResponse([{
+            "name": "**Academy Answer**",
+            "snippet": f"You have reached the maximum of {MAX_INTERACTIONS} interactions. Please contact support for further queries.",
+            "links": []
+        }])
+
+    # ------------------ Step 0b: Check educational query ------------------
     if not is_educational_query_openai(query, user_id=user_id, db=db):
-        print(f"[WARN] Query not educational: {query}")
-        # Return an empty result or a friendly message
-        results = [{
+        return JSONResponse([{
             "name": "**Academy Answer**",
             "snippet": "Your query does not seem to be educational or relevant.",
             "links": []
-        }]
-        return JSONResponse(results)
-    
-    
-    global user_vectorstores_initialized,pdf_listing_done,all_pdfs
-    if user_id not in user_contexts:
-        user_contexts[user_id] = []
-        print(f"[DEBUG] Created new context for user: {user_id}")
+        }])
 
-    # ------------------ Initialize vector stores ------------------
-    # ------------------ Ensure vector stores exist ------------------
-    
-    
+    # ------------------ Step 1: Prepare PDF list ------------------
     if not pdf_listing_done:
         print("[INFO] Fetching PDF list from Google Drive for the first time...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
-        
         pdf_listing_done = True
-    #here 
-    
-    
-    #for pdf in all_pdfs:
-     #   pdf_name = pdf["name"]
-      ## gcs_prefix = os.path.join(os.path.dirname(pdf["path"]), f"vectorstore_{pdf_base_name}") + "/"
-    
-    #    if not gcs_vectorstore_exists(gcs_prefix):  # <-- new helper function
-     #       missing_vectorstores.append(pdf)
-    
-    
-    
-    #user_vectorstores_initialized[user_id] = True
-   # print(f"[INFO] Vector stores initialized for user {user_id}")
-    
-    
 
-    # -------------------- Step 0: Context gist --------------------
-    # -------------------- Step 0: Context gist --------------------
-    # -------------------- Step 0: Context gist --------------------
-    context_gist = get_context_gist(user_id)
-    is_first_query = len(user_contexts[user_id]) == 0
-    
-    # Normalize and split class names
+    # Normalize class names
     class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
-    
-    # Function to normalize PDF paths
+
     def normalize_path(path: str) -> str:
         path = path.lower().strip()
-        path = path.replace("  ", " ")            # remove double spaces
-        path = path.replace(".pdf.pdf", ".pdf")   # fix double suffix
-        path = path.replace("- ", "-")            # normalize hyphen spacing
+        path = path.replace("  ", " ")
+        path = path.replace(".pdf.pdf", ".pdf")
+        path = path.replace("- ", "-")
         return path
-    
-    # ===== DEBUG: Inspect PDF filtering =====
-    print("\n===== DEBUG: PDF Filtering =====")
-    print(f"[INFO] class_name input from query: '{class_name}'")
-    print(f"[INFO] Split and normalized class_names: {class_names_list}")
-    print(f"[INFO] Total PDFs in all_pdfs: {len(all_pdfs)}")
-    
-    pdf_files_debug = []
+
+    # Filter PDFs by class_name
+    pdf_files = []
     for pdf in all_pdfs:
         pdf_path_norm = normalize_path(pdf.get("path", ""))
-        matched_classes = [cn for cn in class_names_list if cn in pdf_path_norm]
-        if matched_classes:
-            pdf_files_debug.append(pdf)
-            print(f"[MATCH] PDF '{pdf['name']}' matched class(es): {matched_classes}")
-    
-    if not pdf_files_debug:
-        print("[WARNING] No PDFs matched the provided class_name(s).")
-    else:
-        print(f"[INFO] Total PDFs matched: {len(pdf_files_debug)}")
-    print("===== END DEBUG =====\n")
-    
-    # Use this normalized list for downstream logic
-    pdf_files = pdf_files_debug
-    
-    # Print final matched PDFs
-    for pdf in pdf_files:
-        print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")
-    
-    # Summary
-    print(f"[DEBUG] class_names passed from query: {class_name}")
-    print(f"[DEBUG] Lowercased PDF paths for comparison: {[normalize_path(pdf.get('path', '')) for pdf in all_pdfs]}")
+        if any(cn in pdf_path_norm for cn in class_names_list):
+            pdf_files.append(pdf)
 
+    context_gist = get_context_gist(user_id)
+    is_first_query = len(user_contexts[user_id]) == 0
 
-        
+    # ------------------ Step 2: Classify query ------------------
     query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
-
-    
     if is_first_query:
         query_type = "pdf_only"
-        print(f"[DEBUG] First query for user, forcing query_type to 'pdf_only'")
-    else:
-        print(f"[DEBUG] Classified query_type: {query_type} based on context")
 
     use_context_only = query_type == "context_only"
 
-    # -------------------- Step 1: Retrieve PDFs --------------------
-    # -------------------- Step 1: Retrieve PDFs --------------------
-    
-    if query_type in ("pdf_only", "mixed") and class_name:     
-        if not pdf_files:
-            print(f"[WARNING] No PDFs found for '{class_name}'. GPT will fallback to context-only or external knowledge")
-            use_context_only = True
-
-    
-    # -------------------- Step 1b: Check query intent with OpenAI --------------------
-    # -------------------- Step 1b: Handle PDF link requests --------------------
+    # ------------------ Step 3: Handle PDF link requests ------------------
     pdf_urls_to_send = []
     if pdf_files and is_pdf_request(query, user_id=user_id, db=db):
         query_lower = query.lower()
-        print(f"[DEBUG] Query received: {query_lower}")
-        print(f"[DEBUG] Total PDFs available: {len(pdf_files)}")
-    
-        # Extract year, term, and week from query
         year_match = re.search(r"year\s*(\d+)", query_lower)
         query_year = year_match.group(1) if year_match else None
-    
         term_match = re.search(r"term\s*(\d+)", query_lower)
         query_term = term_match.group(1) if term_match else None
-    
         week_match = re.search(r"week\s*(\d+)", query_lower)
         query_week = week_match.group(1) if week_match else None
-    
-        print(f"[DEBUG] Extracted from query -> year: {query_year}, term: {query_term}, week: {query_week}")
-    
-        # Filter PDFs based on year, term, and optionally week
+
         filtered_pdfs = []
         for pdf in pdf_files:
             path_lower = pdf.get("path", "").lower()
             name_lower = pdf["name"].lower()
-    
-            # Skip PDFs not matching the requested year
             if query_year and f"year {query_year}" not in path_lower:
                 continue
-    
-            # Extract term/week from PDF name
             term_matches = re.findall(r"t\s*(\d+)", name_lower)
             week_matches = re.findall(r"w\s*(\d+)", name_lower)
-    
-            term_match_ok = (query_term is None or query_term in term_matches)
-            week_match_ok = (query_week is None or query_week in week_matches)
-    
-            if term_match_ok and week_match_ok:
+            if (query_term is None or query_term in term_matches) and (query_week is None or query_week in week_matches):
                 filtered_pdfs.append(pdf)
-                print(f"[DEBUG] PDF matched filter: {pdf['name']}")
-    
-        print(f"[DEBUG] PDFs after filtering: {[pdf['name'] for pdf in filtered_pdfs]}")
-    
-        # Generate URLs for matched PDFs
+
         if filtered_pdfs:
             pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
-            urls_text = "\n".join(pdf_urls_to_send)
-            answer_text = f"Here are the PDFs you requested:\n{urls_text}"
+            answer_text = f"Here are the PDFs you requested:\n" + "\n".join(pdf_urls_to_send)
         else:
-            pdf_urls_to_send = []
             answer_text = "No PDFs found."
-    
-        print(f"[DEBUG] PDF URLs to send: {pdf_urls_to_send}")
-    
-         # -------------------- Prepare structured response --------------------
+
         source_name = "Academy Answer"
         results.append({
             "name": f"**{source_name}**",
             "snippet": answer_text,
             "links": pdf_urls_to_send
         })
-    
-        # -------------------- Step 8: Update user context --------------------
         append_to_user_context(user_id, "user", query)
         append_to_user_context(user_id, "assistant", answer_text)
-    
-        print("==================== SEARCH REQUEST END ====================\n")
         return JSONResponse(results)
 
-
-    
-    # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
-    # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
-    # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
-    # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
-    context_texts_str = ""
-    
+    # ------------------ Step 4: Retrieve top PDF chunks ------------------
     if pdf_files and not use_context_only:
-        # Normalize class names for DB filtering
         class_list = [cn.strip() for cn in class_name.split(",")] if class_name else []
-        print(f"[DEBUG] Normalized class_list for filtering: {class_list}")
-    
-        # Fetch top-k chunks from DB with case-insensitive class_name filtering
-        top_chunks = get_top_k_chunks_from_db(query, class_list, db=db, top_k=TOP_K)
-    
+        top_chunks = search_top_k(query, top_k=TOP_K, class_filter=class_list)
         if not top_chunks:
-            print(f"[WARN] No top chunks found from DB. GPT will rely on context or external knowledge")
             use_context_only = True
-        else:
-            # Build context string from chunks
-            context_texts = [
-                f"PDF: {chunk.pdf_name} (Page {chunk.page_number})\n{chunk.chunk_text}"
-                for chunk, _ in top_chunks
-            ]
-            context_texts_str = "\n".join(context_texts)
-            print(f"[DEBUG] Context texts prepared from DB chunks, total length: {len(context_texts_str)} chars")
-    
-            # Debug: Show all retrieved PDF names
-            pdf_names_in_db = [chunk.pdf_name for chunk, _ in top_chunks]
-            for cn in class_list:
-                matched = [name for name in pdf_names_in_db if cn.lower() in name.lower()]
-                if matched:
-                    print(f"[DEBUG] Class '{cn}' matched PDFs: {matched}")
-                else:
-                    print(f"[WARN] Class '{cn}' did NOT match any PDFs in DB!")
-    
-            print(f"[DEBUG] use_context_only={use_context_only}, number of top_chunks={len(top_chunks)}")
-    
-            # Sort top_chunks by score (descending = most relevant first)
-            top_chunks = sorted(top_chunks, key=lambda x: x[1], reverse=True)[:TOP_K]
-            print(f"[DEBUG] Total top chunks after sorting: {len(top_chunks)}")
-            for idx, (doc, score) in enumerate(top_chunks):
-                pdf_name = doc.metadata.get('pdf_name', 'N/A')
-                page_num = doc.metadata.get('page_number', 'N/A')
-                snippet_preview = doc.page_content[:100] if doc.page_content else "[EMPTY]"
-                print(f"[DEBUG] Sorted Chunk {idx+1}: pdf_name='{pdf_name}', page={page_num}, score={score}, snippet_preview='{snippet_preview}'")
-    
-            # Build context string once after sorting
-            context_texts = [
-                f"PDF: {doc.metadata.get('pdf_name','N/A')} (Page {doc.metadata.get('page_number','N/A')})\n{doc.page_content}"
-                for doc, _ in top_chunks
-            ]
-            context_texts_str = "\n".join(context_texts)
-            print(f"[DEBUG] Context texts prepared, total length: {len(context_texts_str)} characters")
 
-    # -------------------- Step 3: Prepare GPT prompt --------------------
+        # Sort top_chunks by score descending
+        top_chunks = sorted(top_chunks, key=lambda x: x.get('score', 0), reverse=True)[:TOP_K]
+
+        # Build context string
+        context_texts_str = "\n".join(
+            f"PDF: {c.get('pdf_name','N/A')} (Page {c.get('page_number','N/A')})\n{c.get('chunk_text','')}"
+            for c in top_chunks
+        )
+
+    # ------------------ Step 5: Prepare GPT prompt ------------------
     reasoning_instruction = {
         "simple": "Use plain, beginner-friendly language. Keep sentences short and avoid jargon.",
         "medium": "Give a balanced explanation — clear, moderately detailed, and easy to follow.",
         "advanced": "Provide a detailed, analytical, and example-rich explanation that shows expert understanding."
     }.get(reasoning, "Use plain, beginner-friendly language.")
 
-    print(f"[DEBUG] use_context_only={use_context_only}, len(top_chunks)={len(top_chunks) if top_chunks else 0}")
-    print(f"[DEBUG] Length of context_texts_str: {len(context_texts_str)}")
-
-
     if use_context_only or not top_chunks:
-        print("[INFO] GPT will rely on context or external knowledge ONLY")
-        gpt_prompt = f"""
-        You are an assistant. Follow the instructions below carefully.
-        
-        Style: {reasoning_instruction}
-        
-        Use only the previous conversation context to answer:
-        {context_gist}
-        
-        Question:
-        {query}
-        
-        Guidelines:
-        - Do not use any external knowledge beyond the conversation.
-        - If the user asks for a resource (e.g., "booklet", "PDF", "worksheet") that is mentioned 
-          in the context but not actually provided, clearly say you do not have access to it, 
-          rather than implying that you know its contents.
-        - Prepend "[GPT answer]" if relying on your own understanding.
-        """
-    else:
-        print("[INFO] GPT will use PDF chunks + context")
         gpt_prompt = f"""
 You are an assistant. Follow the instructions below carefully.
 
 Style: {reasoning_instruction}
 
-Use the following to answer:
+Use only the previous conversation context to answer:
+{context_gist}
+
+Question:
+{query}
+
+Guidelines:
+- Do not use any external knowledge beyond the conversation.
+- If the user asks for a resource mentioned but not provided, say you do not have access.
+- Prepend "[GPT answer]" if relying on your own understanding.
+"""
+    else:
+        gpt_prompt = f"""
+You are an assistant. Follow the instructions below carefully.
+
+Style: {reasoning_instruction}
+
 Previous conversation context:
 {context_gist}
 
@@ -2006,37 +1845,20 @@ Question:
 {query}
 
 Guidelines:
-1. Use PDF chunks if they are relevant to the question.
-2. Do not invent facts or add information not found in context or PDFs.
+1. Use PDF chunks if relevant.
+2. Do not invent facts.
 3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
 """
 
-    print("[DEBUG] GPT PROMPT PREVIEW (first 500 chars):", gpt_prompt[:500])
-
-    # -------------------- Step 4: Call GPT --------------------
-    print(f"[DEBUG] GPT prompt length: {len(gpt_prompt)} chars")
-    print(f"[DEBUG] First 500 chars of GPT prompt:\n{gpt_prompt[:500]}")
-
+    # ------------------ Step 6: Call GPT ------------------
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
         temperature=0.2
-    )   
-
-    #generate ai reply
+    )
     answer_text = answer_response.choices[0].message.content.strip()
-    print("[DEBUG] GPT RAW RESPONSE (first 500 chars):", answer_text[:500])
 
-    #log openai api usage
-    usage = answer_response.usage
-    prompt_tokens = usage.prompt_tokens
-    completion_tokens = usage.completion_tokens    
-    call_cost = calculate_openai_cost(ANSWER_MODEL, prompt_tokens, completion_tokens, multiplier=1.0)
-    print(f"[INFO] OpenAI API cost for this call: ${call_cost}")    
-    # --- Log usage in DB ---
-    log_openai_usage(db, user_id, ANSWER_MODEL, prompt_tokens, completion_tokens, call_cost)
-
-    # -------------------- Step 5: Determine Source --------------------
+    # ------------------ Step 7: Determine source ------------------
     if answer_text.startswith("[PDF-based answer]"):
         source_name = "Academy Answer"
         answer_text = answer_text.replace("[PDF-based answer]", "", 1).strip()
@@ -2044,22 +1866,19 @@ Guidelines:
         source_name = "GPT Answer"
         answer_text = answer_text.replace("[GPT answer]", "", 1).strip()
     else:
-        # Infer source if model didn’t label response
         if top_chunks and any(word in answer_text.lower() for word in ["page", "pdf", "worksheet"]):
             source_name = "Academy Answer"
         else:
             source_name = "GPT Answer"
 
-    print(f"[INFO] Source detected: {source_name}")
-
-    # -------------------- Step 6: Append PDF metadata --------------------
+    # ------------------ Step 8: Append PDF metadata once ------------------
     if source_name == "Academy Answer" and top_chunks:
-        top_doc, _ = top_chunks[0]
-        pdf_metadata = f"[PDF used: {top_doc.metadata['pdf_name']} (Page {top_doc.metadata.get('page_number','N/A')})]"
+        top_doc = top_chunks[0]  # dict
+        pdf_metadata = f"[PDF used: {top_doc.get('pdf_name','N/A')} (Page {top_doc.get('page_number','N/A')})]"
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
-    # -------------------- Step 7: Prepare results --------------------
-    used_pdfs = list({doc.metadata.get("pdf_link") for doc, _ in top_chunks if doc.metadata.get("pdf_link")})
+    # ------------------ Step 9: Prepare final results ------------------
+    used_pdfs = [c.get("pdf_link") for c in top_chunks if c.get("pdf_link")]
 
     results.append({
         "name": f"**{source_name}**",
@@ -2067,12 +1886,13 @@ Guidelines:
         "links": used_pdfs if source_name == "Academy Answer" else []
     })
 
-    # -------------------- Step 8: Update user context --------------------
+    # ------------------ Step 10: Update user context ------------------
     append_to_user_context(user_id, "user", query)
     append_to_user_context(user_id, "assistant", answer_text)
 
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse(results)
+
 
 
 
