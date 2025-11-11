@@ -1713,8 +1713,8 @@ async def search_pdfs(
 
     print(f"[DEBUG] PDFs matching classes {class_names}: {len(pdf_files)}")
     for pdf in pdf_files:
-    print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")    
-    query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
+        print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")    
+        query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
 
     
     if is_first_query:
