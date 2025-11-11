@@ -172,6 +172,16 @@ class OpenAIUsageLog(Base):
     cost_usd = Column(Float)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
+class Embedding(Base):
+    __tablename__ = "embeddings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pdf_name = Column(String(255), nullable=False)
+    class_name = Column(String(255), nullable=True)
+    chunk_id = Column(String(255), nullable=True)
+    embedding_vector = Column(Text, nullable=False)  # store JSON string of the embedding
+    
+
 class GuestChatbotMessage(BaseModel):
     role: str
     content: str
@@ -1979,6 +1989,96 @@ Guidelines:
 # Utility: hash password
 
 # Bulk upload endpoint
+
+@app.post("/admin/upload_embeddings_to_db")
+def upload_embeddings_to_db(db: Session = Depends(get_db)):
+    """
+    Reads vector store JSON files from Google Cloud Storage for each PDF
+    and uploads embeddings to the Railway DB table.
+    """
+    print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
+
+    total_uploaded = 0
+
+    try:
+        # -------------------------
+        # Step 0: Populate all_pdfs
+        # -------------------------
+        print("[DEBUG] Fetching PDF list from Google Drive...")
+        # Use the global DEMO_FOLDER_ID
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+
+        if not all_pdfs:
+            raise HTTPException(status_code=404, detail="No PDFs found in Google Drive to process vector stores.")
+        print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
+
+        # -------------------------
+        # Step 1: Process vector stores
+        # -------------------------
+        for pdf_idx, pdf in enumerate(all_pdfs, start=1):
+            pdf_name = pdf.get("name")
+            pdf_path = pdf.get("path")
+            pdf_base_name = pdf_name.rsplit(".", 1)[0]
+            parent_folder = os.path.dirname(pdf_path)
+
+            print(f"\n[DEBUG] Processing PDF {pdf_idx}/{len(all_pdfs)}: {pdf_name}")
+            print(f"[DEBUG] PDF path: {pdf_path}, Parent folder: {parent_folder}")
+
+            # Exact vector store folder for this PDF
+            vectorstore_prefix = os.path.join(parent_folder, f"vectorstore_{pdf_base_name}") + "/"
+            print(f"[DEBUG] Looking for vector store folder in GCS: {vectorstore_prefix}")
+
+            blobs = list(gcs_bucket.list_blobs(prefix=vectorstore_prefix))
+            print(f"[DEBUG] Number of files found in vector store folder: {len(blobs)}")
+
+            if not blobs:
+                print(f"[WARNING] No vector store files found for PDF: {pdf_name}")
+                continue
+
+            for blob_idx, blob in enumerate(blobs, start=1):
+                print(f"[DEBUG] Checking blob {blob_idx}/{len(blobs)}: {blob.name}")
+                if not blob.name.endswith(".json"):
+                    print(f"[DEBUG] Skipping non-JSON blob: {blob.name}")
+                    continue
+
+                print(f"[DEBUG] Downloading blob content: {blob.name}")
+                data = blob.download_as_text()
+                
+                try:
+                    vector_data = json.loads(data)
+                except json.JSONDecodeError as e:
+                    print(f"[ERROR] Failed to parse JSON from blob {blob.name}: {e}")
+                    continue
+
+                print(f"[DEBUG] Number of vector chunks in blob: {len(vector_data)}")
+
+                for chunk_idx, item in enumerate(vector_data, start=1):
+                    embedding_vector = item.get("embedding")
+                    if embedding_vector is None:
+                        print(f"[WARNING] Skipping chunk {chunk_idx} without embedding: {item}")
+                        continue
+
+                    embedding_str = json.dumps(embedding_vector)
+
+                    new_embedding = Embedding(
+                        pdf_name=item.get("pdf_name"),
+                        class_name=item.get("class_name"),
+                        chunk_id=item.get("chunk_id"),
+                        embedding_vector=embedding_str
+                    )
+                    db.add(new_embedding)
+                    total_uploaded += 1
+                    print(f"[DEBUG] Uploaded embedding chunk {chunk_idx} from blob {blob.name}")
+
+        db.commit()
+        print(f"\n[DEBUG] Successfully uploaded {total_uploaded} embeddings to DB")
+        return {"message": f"Successfully uploaded {total_uploaded} embeddings to the DB."}
+
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] Failed to upload embeddings: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+
 
 
 @app.post("/admin/create_vectorstores")
