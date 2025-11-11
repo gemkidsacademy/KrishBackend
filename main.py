@@ -1880,6 +1880,7 @@ async def search_pdfs(
     
 
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
+    #here
     context_texts_str = ""
     if pdf_files and not use_context_only:
         class_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
@@ -1890,7 +1891,7 @@ async def search_pdfs(
         db_chunks = db.query(PDFChunkTable).limit(10).all()
         for i, c in enumerate(db_chunks):
             print(f"[DEBUG] DB row {i+1}: pdf_name={c.pdf_name}, class_name={c.class_name}, chunk_id={c.chunk_id}")
-        # here
+        
         top_chunks = get_top_k_chunks_from_db(query, class_list, db, top_k=TOP_K)
         
         if top_chunks:
@@ -2281,15 +2282,18 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 if existing:
                     total_skipped += 1
                     continue
-
+                
+                # Sanitize chunk_text to remove NUL characters
+                safe_chunk_text = getattr(doc, "chunk_text", "").replace("\x00", "")
+                
                 new_embedding = Embedding(
                     pdf_name=pdf_name,
                     class_name=class_name,
                     chunk_id=doc_id,
                     embedding_vector=json.dumps(embedding_vector),
-                    chunk_text=chunk_text
+                    chunk_text=safe_chunk_text
                 )
-                db.add(new_embedding)
+                db.add(new_embedding)                
                 total_uploaded += 1
                 uploaded_this_pdf += 1
 
