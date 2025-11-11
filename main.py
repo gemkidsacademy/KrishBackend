@@ -1745,6 +1745,35 @@ async def search_pdfs(
     ]
 
     print(f"[DEBUG] PDFs matching classes {class_names}: {len(pdf_files)}")
+    # ===== DEBUG: Inspect PDF selection =====
+    print("\n===== DEBUG: PDF Filtering =====")
+    print(f"[INFO] class_name input from query: '{class_name}'")
+    class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
+    print(f"[INFO] Split and lowercased class_names: {class_names_list}")
+    
+    print(f"[INFO] Total PDFs in all_pdfs: {len(all_pdfs)}")
+    for idx, pdf in enumerate(all_pdfs):
+        pdf_path_lower = pdf.get("path", "").lower()
+        print(f"  PDF {idx+1}: name='{pdf['name']}', path='{pdf_path_lower}'")
+    
+    # Check which PDFs match any class_name
+    pdf_files_debug = []
+    for pdf in all_pdfs:
+        pdf_path_lower = pdf.get("path", "").lower()
+        matched_classes = [cn for cn in class_names_list if cn in pdf_path_lower]
+        if matched_classes:
+            pdf_files_debug.append(pdf)
+            print(f"[MATCH] PDF '{pdf['name']}' matched class(es): {matched_classes}")
+    
+    if not pdf_files_debug:
+        print("[WARNING] No PDFs matched the provided class_name(s).")
+    else:
+        print(f"[INFO] Total PDFs matched: {len(pdf_files_debug)}")
+    print("===== END DEBUG =====\n")
+    
+    # Use this for downstream logic temporarily
+    pdf_files = pdf_files_debug
+
     for pdf in pdf_files:
         print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")    
     print(f"[DEBUG] class_names passed from query: {class_name}")
