@@ -72,6 +72,9 @@ from rapidfuzz import fuzz
 user_contexts: dict[str, list[dict[str, str]]] = {}
 MAX_INTERACTIONS = 20
 interaction=0
+# Global FAISS index (in-memory)
+FAISS_INDEX = None
+FAISS_METADATA = None
 #for creating user passwords
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -191,11 +194,12 @@ class Embedding(Base):
     id = Column(Integer, primary_key=True)
     pdf_name = Column(String, nullable=False)
     class_name = Column(String, nullable=True)
-    pdf_link = Column(String, nullable=True)       # added to match metadata
+    pdf_link = Column(String, nullable=True)
     chunk_text = Column(Text, nullable=False)
     page_number = Column(Integer, nullable=False)
     chunk_index = Column(Integer, nullable=False)
-    chunk_id = Column(String, nullable=False)   
+    chunk_id = Column(String, nullable=False)
+    embedding_vector = Column(ARRAY(Float), nullable=False)  # <-- add this
  
 class GuestChatbotMessage(BaseModel):
     role: str
@@ -1689,6 +1693,7 @@ async def search_pdfs(
 ):
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
+    global FAISS_INDEX, FAISS_METADATA
 
     results = []
     top_chunks = []
@@ -1788,12 +1793,42 @@ async def search_pdfs(
     # ------------------ Step 4: Retrieve top PDF chunks ------------------
     if pdf_files and not use_context_only:
         class_list = [cn.strip() for cn in class_name.split(",")] if class_name else []
-        top_chunks = search_top_k(query, top_k=TOP_K, class_filter=class_list)
+        if FAISS_INDEX is not None and FAISS_METADATA is not None:
+            # Step 1a: Convert query to embedding
+            query_embedding = OpenAIEmbeddings(
+                model="text-embedding-3-large",
+                openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+            ).embed_query(query)
+        
+            query_vector = np.array([query_embedding], dtype='float32')
+            faiss.normalize_L2(query_vector)
+        
+            # Step 1b: Search FAISS index
+            k = TOP_K
+            D, I = FAISS_INDEX.search(query_vector, k)  # distances, indices
+        
+            top_chunks = []
+            for idx, score in zip(I[0], D[0]):
+                if idx >= len(FAISS_METADATA):
+                    continue
+                chunk_meta = FAISS_METADATA[idx].copy()
+                chunk_meta['score'] = float(score)
+                top_chunks.append(chunk_meta)
+        
+            # Optional: Filter by class_name if provided
+            if class_list:
+                top_chunks = [c for c in top_chunks if c.get("class_name") in class_list]
+        
+            # Sort by score descending
+            top_chunks = sorted(top_chunks, key=lambda x: x['score'], reverse=True)[:TOP_K]
+        else:
+            top_chunks = []  # fallback if FAISS not initialized
+
+     
         if not top_chunks:
             use_context_only = True
 
-        # Sort top_chunks by score descending
-        top_chunks = sorted(top_chunks, key=lambda x: x.get('score', 0), reverse=True)[:TOP_K]
+        
 
         # Build context string
         context_texts_str = "\n".join(
@@ -2057,28 +2092,46 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
 
 @app.post("/admin/initialize_faiss")
 def initialize_faiss(db: Session = Depends(get_db)):
-    all_embeddings = db.query(Embedding).all()
-    
-    vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
-    metadata = [
-        {
-            "pdf_name": e.pdf_name,
-            "class_name": e.class_name,
-            "page_number": e.page_number,
-            "chunk_index": e.chunk_index,
-            "pdf_link": e.pdf_link,
-            "chunk_text": e.chunk_text
-        }
-        for e in all_embeddings
-    ]
+    """
+    Reads embeddings from the database and initializes a FAISS index in memory.
+    """
+    global FAISS_INDEX, FAISS_METADATA
 
-    # Build FAISS index
-    d = vectors.shape[1]
-    index = faiss.IndexFlatIP(d)
-    faiss.normalize_L2(vectors)
-    index.add(vectors)
+    try:
+        all_embeddings = db.query(Embedding).all()
+        if not all_embeddings:
+            raise HTTPException(status_code=404, detail="No embeddings found in DB.")
 
-    return {"message": "FAISS index initialized", "num_embeddings": len(all_embeddings)}
+        # Convert embeddings to NumPy array
+        vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
+
+        # Extract metadata for each embedding
+        FAISS_METADATA = [
+            {
+                "pdf_name": e.pdf_name,
+                "class_name": e.class_name,
+                "page_number": e.page_number,
+                "chunk_index": e.chunk_index,
+                "pdf_link": e.pdf_link,
+                "chunk_text": e.chunk_text
+            }
+            for e in all_embeddings
+        ]
+
+        # Build FAISS index
+        d = vectors.shape[1]  # embedding dimension
+        FAISS_INDEX = faiss.IndexFlatIP(d)
+        faiss.normalize_L2(vectors)  # normalize for cosine similarity
+        FAISS_INDEX.add(vectors)
+
+        print(f"[DEBUG] FAISS index initialized with {len(all_embeddings)} embeddings.")
+
+        return {"message": "FAISS index initialized", "num_embeddings": len(all_embeddings)}
+
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize FAISS index: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to initialize FAISS index: {str(e)}")
+     
 
 
 @app.post("/admin/create_vectorstores")
@@ -2128,7 +2181,6 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         # Step 0: Fetch PDFs
         print("[DEBUG] Fetching PDF list from Google Drive...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
-        
         if not all_pdfs:
             raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
@@ -2170,13 +2222,14 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 metadata = getattr(doc, "metadata", {}) or {}
                 chunk_text = metadata.get("chunk_text") or getattr(doc, "page_content", None) or ""
                 class_name = metadata.get("class_name")
+                pdf_link = metadata.get("pdf_link")  # optional
                 page_number = metadata.get("page_number", 0)
                 chunk_index = metadata.get("chunk_index", 0)
 
                 try:
                     # Reconstruct embedding as a numeric list
                     internal_id = vs.index_to_docstore_id_inverse[doc_id]
-                    embedding_vector = vs.index.reconstruct(internal_id).tolist()  # list of floats
+                    embedding_vector = vs.index.reconstruct(internal_id).tolist()
                 except Exception as e:
                     print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
                     continue
@@ -2194,11 +2247,12 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 new_embedding = Embedding(
                     pdf_name=pdf_name,
                     class_name=class_name,
-                    chunk_id=doc_id,
-                    embedding_vector=embedding_vector,  # ✅ numeric array stored in ARRAY(Float)
+                    pdf_link=pdf_link,
                     chunk_text=chunk_text,
                     page_number=page_number,
-                    chunk_index=chunk_index
+                    chunk_index=chunk_index,
+                    chunk_id=doc_id,
+                    embedding_vector=embedding_vector
                 )
                 db.add(new_embedding)
                 total_uploaded += 1
@@ -2220,7 +2274,6 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         db.rollback()
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
-
 
 
 
