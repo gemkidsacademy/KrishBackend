@@ -181,6 +181,7 @@ class Embedding(Base):
     class_name = Column(String(255), nullable=True)
     chunk_id = Column(String(255), nullable=True)
     embedding_vector = Column(Text, nullable=False)  # store JSON string of the embedding
+    chunk_text = Column(Text, nullable=True)
     
 
 class GuestChatbotMessage(BaseModel):
@@ -1889,7 +1890,7 @@ async def search_pdfs(
         db_chunks = db.query(PDFChunkTable).limit(10).all()
         for i, c in enumerate(db_chunks):
             print(f"[DEBUG] DB row {i+1}: pdf_name={c.pdf_name}, class_name={c.class_name}, chunk_id={c.chunk_id}")
-
+        # here
         top_chunks = get_top_k_chunks_from_db(query, class_list, db, top_k=TOP_K)
         
         if top_chunks:
@@ -1902,6 +1903,7 @@ async def search_pdfs(
         else:
             print(f"[DEBUG] No top chunks found in DB, GPT will rely on context only")
             use_context_only = True
+        #till here
         for idx, (doc, score) in enumerate(top_chunks[:5]):  # show first 5 for brevity
             print(f"[DEBUG] Chunk {idx+1}: pdf_name={getattr(doc, 'pdf_name', 'N/A')}, score={score}, text_preview={getattr(doc,'chunk_text','')[:100]}")
 
@@ -2208,11 +2210,12 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
 
 
 # ---------- Bulk upload embeddings endpoint ----------
+# ---------- Bulk upload embeddings endpoint (updated) ----------
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
     Loads FAISS vector stores for all PDFs from GCS in memory and inserts embeddings
-    into the DB, avoiding duplicates. Compatible with tuple/docstore variations.
+    and chunk text into the DB, avoiding duplicates.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
     total_uploaded = 0
@@ -2266,7 +2269,9 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                     continue
 
                 # Safe metadata extraction
-                class_name = getattr(getattr(doc, "metadata", {}), "get", lambda k, d=None: d)("class_name", None)
+                metadata = getattr(doc, "metadata", {})
+                class_name = metadata.get("class_name") if metadata else None
+                chunk_text = getattr(doc, "page_content", None) or getattr(doc, "text", None) or ""
 
                 # Skip duplicates
                 existing = db.query(Embedding).filter_by(
@@ -2281,7 +2286,8 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                     pdf_name=pdf_name,
                     class_name=class_name,
                     chunk_id=doc_id,
-                    embedding_vector=json.dumps(embedding_vector)
+                    embedding_vector=json.dumps(embedding_vector),
+                    chunk_text=chunk_text
                 )
                 db.add(new_embedding)
                 total_uploaded += 1
@@ -2302,6 +2308,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         db.rollback()
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+
 
 
 
