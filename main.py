@@ -11,6 +11,11 @@ import faiss
 from pgvector.sqlalchemy import Vector
 
 
+
+import numpy as np
+
+
+
 #Twilio API
 from twilio.rest import Client
 # FastAPI & Pydantic
@@ -19,7 +24,7 @@ from pydantic import BaseModel
 from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float, func, ARRAY
+from sqlalchemy import or_, create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float, func, ARRAY
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 
@@ -1620,89 +1625,75 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
 
     return is_educational
     
-def get_top_k_chunks_from_db(query_text: str, class_names: list, db: Session, top_k: int = 5):
+def get_top_k_chunks_from_db(query_text: str, class_list: list, db: Session, top_k: int = 5):
     """
-    Retrieve top-k most similar PDF chunks from the embeddings table using cosine similarity.
-
+    Retrieve top-k PDF chunks from the DB using similarity search.
+    
     Args:
-        query_text (str): User query.
-        class_names (list): Optional list of class_name strings to filter PDFs.
-        db (Session): SQLAlchemy session.
+        query_text (str): The user's query.
+        class_list (list): List of class names to filter (case-insensitive, trims spaces).
+        db (Session): SQLAlchemy DB session.
         top_k (int): Number of top chunks to return.
-
+    
     Returns:
-        List of tuples: (Embedding instance, similarity score)
+        List of tuples: [(Embedding object, similarity_score), ...]
     """
-    import numpy as np
-    from langchain.embeddings import OpenAIEmbeddings
+    if not class_list:
+        query = db.query(Embedding)
+        print("[DEBUG] No class filter provided, fetching all chunks.")
+    else:
+        # Case-insensitive, whitespace-trimmed filtering
+        filters = [
+            func.trim(func.lower(Embedding.class_name)).ilike(f"%{cn.lower().strip()}%")
+            for cn in class_list
+        ]
+        query = db.query(Embedding).filter(or_(*filters))
+        print(f"[DEBUG] Filtering DB for classes: {class_list}")
 
-    print("\n[DEBUG] ===== Starting get_top_k_chunks_from_db =====")
-    print(f"[DEBUG] Query text: {query_text}")
-    print(f"[DEBUG] Class names filter: {class_names}")
-    print(f"[DEBUG] Requested top_k: {top_k}")
+    # Fetch candidate chunks
+    chunks = query.all()
+    print(f"[DEBUG] Candidate chunks retrieved from DB: {len(chunks)}")
+    for c in chunks:
+        print(f"  PDF: {c.pdf_name}, class_name: '{c.class_name}', chunk_index: {c.chunk_index}, embedding length: {len(c.embedding_vector)}")
 
-    # Step 1: Embed the query
-    try:
-        embeddings_model = OpenAIEmbeddings(
-            model="text-embedding-3-large",
-            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
-        )
-        query_vector = np.array(embeddings_model.embed_query(query_text), dtype=np.float32)
-        query_vector_norm = query_vector / (np.linalg.norm(query_vector) + 1e-10)
-        print(f"[DEBUG] Query embedding generated successfully. Vector shape: {query_vector_norm.shape}")
-    except Exception as e:
-        print(f"[ERROR] Failed to embed query: {e}")
+    if not chunks:
+        print(f"[WARN] No chunks found for classes: {class_list}")
         return []
 
-    # Step 2: Fetch embeddings from DB
-    try:
-        q = db.query(Embedding)
-        if class_names:
-            q = q.filter(Embedding.class_name.in_(class_names))
-        all_embeddings = q.all()
-        print(f"[DEBUG] Retrieved {len(all_embeddings)} embeddings from DB")
-        if not all_embeddings:
-            print("[DEBUG] No embeddings found in DB. Returning empty list.")
-            return []
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch embeddings from DB: {e}")
-        return []
+    # Embed the query
+    embedding_model = OpenAIEmbeddings()
+    query_vector = embedding_model.embed_query(query_text)
 
-    # Step 3: Convert embeddings to numpy arrays
-    vectors = []
-    docs = []
-    for idx, emb in enumerate(all_embeddings, start=1):
-        try:
-            vec = np.array(emb.embedding_vector, dtype=np.float32)
-            vectors.append(vec)
-            docs.append(emb)
-        except Exception as e:
-            print(f"[WARNING] Failed to process embedding #{idx} (PDF: {emb.pdf_name}, chunk_id: {emb.chunk_id}): {e}")
-    vectors = np.stack(vectors)
-    vectors_norm = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-10)
-    print(f"[DEBUG] Normalized all embeddings. Shape: {vectors_norm.shape}")
+    # Check query_vector dimension
+    print(f"[DEBUG] Query embedding length: {len(query_vector)}")
 
-    # Step 4: Compute cosine similarity
-    try:
-        sims = vectors_norm @ query_vector_norm
-        print(f"[DEBUG] Cosine similarity computed. Sample scores: {sims[:5]}")
-    except Exception as e:
-        print(f"[ERROR] Failed to compute cosine similarity: {e}")
-        return []
+    # Compute cosine similarity
+    def cosine_sim(a, b):
+        a = np.array(a, dtype=float)
+        b = np.array(b, dtype=float)
+        if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
+            return 0.0
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-    # Step 5: Get top-k results
-    top_k = min(top_k, len(all_embeddings))
-    top_indices = sims.argsort()[-top_k:][::-1]
-    top_chunks = [(docs[i], float(sims[i])) for i in top_indices]
+    scored_chunks = []
+    for chunk in chunks:
+        if len(chunk.embedding_vector) != len(query_vector):
+            print(f"[WARN] Embedding length mismatch for PDF '{chunk.pdf_name}', chunk_index={chunk.chunk_index}")
+            score = 0.0
+        else:
+            score = cosine_sim(chunk.embedding_vector, query_vector)
+        scored_chunks.append((chunk, score))
+        print(f"[DEBUG] Chunk '{chunk.pdf_name}' score: {score}")
 
-    print(f"[DEBUG] Top {top_k} chunks selected:")
-    for rank, (doc, score) in enumerate(top_chunks, start=1):
-        print(f"  [RANK {rank}] PDF: {doc.pdf_name}, Chunk ID: {doc.chunk_id}, Score: {score:.4f}, Page: {doc.page_number}, Chunk Index: {doc.chunk_index}")
+    # Sort by similarity descending and take top-k
+    scored_chunks.sort(key=lambda x: x[1], reverse=True)
+    top_chunks = scored_chunks[:top_k]
 
-    print("[DEBUG] ===== Finished get_top_k_chunks_from_db =====\n")
+    print(f"[DEBUG] Top {len(top_chunks)} chunks after similarity sorting:")
+    for idx, (chunk, score) in enumerate(top_chunks):
+        print(f"  {idx+1}: PDF='{chunk.pdf_name}', class='{chunk.class_name}', score={score}, chunk_index={chunk.chunk_index}")
+
     return top_chunks
-
-
     
 @app.get("/search")
 async def search_pdfs(
@@ -1924,47 +1915,41 @@ async def search_pdfs(
     
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
+    # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
     
     if pdf_files and not use_context_only:
         # Normalize class names for DB filtering
-        class_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
+        class_list = [cn.strip() for cn in class_name.split(",")] if class_name else []
         print(f"[DEBUG] Normalized class_list for filtering: {class_list}")
-        print(f"[DEBUG] Attempting to fetch top {TOP_K} chunks from DB (embeddings table)")
     
-        # Fetch top-k chunks from embeddings table using similarity search
+        # Fetch top-k chunks from DB with case-insensitive class_name filtering
         top_chunks = get_top_k_chunks_from_db(query, class_list, db=db, top_k=TOP_K)
-        # Extra check: compare class_list vs actual PDF names in DB
-        pdf_names_in_db = [doc.metadata.get('pdf_name', 'N/A') for doc, _ in top_chunks]
+    
+        if not top_chunks:
+            print(f"[WARN] No top chunks found from DB. GPT will rely on context or external knowledge")
+            use_context_only = True
+        else:
+            # Build context string from chunks
+            context_texts = [
+                f"PDF: {chunk.pdf_name} (Page {chunk.page_number})\n{chunk.chunk_text}"
+                for chunk, _ in top_chunks
+            ]
+            context_texts_str = "\n".join(context_texts)
+            print(f"[DEBUG] Context texts prepared from DB chunks, total length: {len(context_texts_str)} chars")
+    
+        # Debug: Show all retrieved PDF names
+        pdf_names_in_db = [chunk.pdf_name for chunk, _ in top_chunks]
         for cn in class_list:
-            matched = [name for name in pdf_names_in_db if cn in name.lower()]
+            matched = [name for name in pdf_names_in_db if cn.lower() in name.lower()]
             if matched:
                 print(f"[DEBUG] Class '{cn}' matched PDFs: {matched}")
             else:
-                print(f"[WARN] Class '{cn}' did NOT match any PDFs in DB. Check lowercase/uppercase or naming issues!")
-        
-        # Additionally, print all PDF names for visibility
-        print(f"[DEBUG] All PDF names retrieved from DB: {pdf_names_in_db}")
+                print(f"[WARN] Class '{cn}' did NOT match any PDFs in DB!")
+    
+    print(f"[DEBUG] use_context_only={use_context_only}, number of top_chunks={len(top_chunks) if top_chunks else 0}")
 
-        print(f"[DEBUG] top_chunks returned from DB: {len(top_chunks)}")
-    
-        if top_chunks:
-            # Debug each chunk to trace possible lowercase/uppercase issues
-            print("[DEBUG] PDFs returned from DB for similarity search:")
-            for idx, (doc, score) in enumerate(top_chunks):
-                pdf_name = doc.metadata.get('pdf_name', 'N/A')
-                pdf_name_lower = pdf_name.lower()
-                page_num = doc.metadata.get('page_number', 'N/A')
-                snippet_preview = doc.page_content[:100] if doc.page_content else "[EMPTY]"
-                if not doc.page_content.strip():
-                    print(f"[WARN] Chunk {idx+1} has empty page_content! pdf_name={pdf_name}")
-                print(f"[DEBUG] Chunk {idx+1}: pdf_name='{pdf_name}' (lower='{pdf_name_lower}'), page={page_num}, score={score}, snippet_preview='{snippet_preview}'")
-    
-            # Extra check: compare class_list vs actual PDF names in DB
-            pdf_names_in_db = [doc.metadata.get('pdf_name', 'N/A') for doc, _ in top_chunks]
-            for cn in class_list:
-                matched = [name for name in pdf_names_in_db if cn in name.lower()]
-                print(f"[DEBUG] Class '{cn}' matched PDFs: {matched if matched else 'NONE'}")
+            #till here
     
             # Sort top_chunks by score (descending = most relevant first)
             top_chunks = sorted(top_chunks, key=lambda x: x[1], reverse=True)[:TOP_K]
