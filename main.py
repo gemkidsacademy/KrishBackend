@@ -2068,12 +2068,11 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         traceback.print_exc()
         raise
 
-
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
     Loads FAISS vector stores for all PDFs from GCS and inserts embeddings
-    into the DB, avoiding duplicates. Compatible with InMemoryDocstore.
+    into the DB, avoiding duplicates. Compatible with in-memory FAISS loader.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
 
@@ -2093,8 +2092,8 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
         embeddings_model = OpenAIEmbeddings(
             model="text-embedding-ada-002",
-            openai_api_key=os.environ.get("OPENAI_API_KEY_S")  # make sure this is set
-            )
+            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+        )
 
         # -------------------------
         # Step 1: Process vector stores
@@ -2116,11 +2115,10 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 continue
 
             # -------------------------
-            # Step 2: Iterate over FAISS docs
+            # Step 2: Iterate over docstore items
             # -------------------------
-            docstore_items = []
-            if hasattr(vs.docstore, "dict"):  # InMemoryDocstore has .dict attribute
-                docstore_items = vs.docstore.dict.items()
+            if hasattr(vs.docstore, "_dict"):  # InMemoryDocstore
+                docstore_items = vs.docstore._dict.items()
             elif isinstance(vs.docstore, dict):
                 docstore_items = vs.docstore.items()
             else:
@@ -2128,7 +2126,9 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
             for doc_id, doc in docstore_items:
                 try:
-                    embedding_vector = vs.index.reconstruct(doc_id).tolist()
+                    # Map docstore ID to FAISS numeric internal ID
+                    internal_id = vs.index_to_docstore_id_inverse[doc_id]
+                    embedding_vector = vs.index.reconstruct(internal_id).tolist()
                 except Exception as e:
                     print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
                     continue
@@ -2151,6 +2151,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 db.add(new_embedding)
                 total_uploaded += 1
 
+            # Commit per PDF (optional: could batch for multiple PDFs)
             db.commit()
             print(f"[DEBUG] Uploaded {total_uploaded} new embeddings so far. Skipped {total_skipped} duplicates.")
 
@@ -2163,6 +2164,8 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         db.rollback()
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+
+
 
 
         
