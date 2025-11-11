@@ -1989,11 +1989,10 @@ Guidelines:
 # Utility: hash password
 
 # Bulk upload endpoint
-
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
-    Reads vector store JSON files from Google Cloud Storage for each PDF
+    Reads vector store PKL files from Google Cloud Storage for each PDF
     and uploads embeddings to the Railway DB table, avoiding duplicates.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
@@ -2036,20 +2035,21 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
             for blob_idx, blob in enumerate(blobs, start=1):
                 print(f"[DEBUG] Checking blob {blob_idx}/{len(blobs)}: {blob.name}")
-                if not blob.name.endswith(".json"):
-                    print(f"[DEBUG] Skipping non-JSON blob: {blob.name}")
+                
+                if not blob.name.endswith(".pkl"):
+                    print(f"[DEBUG] Skipping non-PKL blob: {blob.name}")
                     continue
 
-                print(f"[DEBUG] Downloading blob content: {blob.name}")
-                data = blob.download_as_text()
-
+                print(f"[DEBUG] Downloading PKL blob: {blob.name}")
+                data_bytes = blob.download_as_bytes()
+                
                 try:
-                    vector_data = json.loads(data)
-                except json.JSONDecodeError as e:
-                    print(f"[ERROR] Failed to parse JSON from blob {blob.name}: {e}")
+                    vector_data = pickle.loads(data_bytes)
+                except Exception as e:
+                    print(f"[ERROR] Failed to load PKL from blob {blob.name}: {e}")
                     continue
 
-                print(f"[DEBUG] Number of vector chunks in blob: {len(vector_data)}")
+                print(f"[DEBUG] Number of vector chunks in PKL blob: {len(vector_data)}")
 
                 for chunk_idx, item in enumerate(vector_data, start=1):
                     embedding_vector = item.get("embedding")
@@ -2093,6 +2093,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         db.rollback()
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+
 
 
 
