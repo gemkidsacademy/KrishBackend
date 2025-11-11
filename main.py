@@ -1989,29 +1989,79 @@ Guidelines:
 # Utility: hash password
 
 # Bulk upload endpoint
+
+def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
+    """
+    Loads a FAISS vector store from GCS directly into memory without creating local temp files.
+
+    Args:
+        gcs_prefix (str): The folder/prefix in GCS where the vector store files are located.
+        embeddings (OpenAIEmbeddings): The embeddings object to use for loading the vector store.
+
+    Returns:
+        FAISS: The loaded FAISS vector store instance.
+    """
+    print(f"\n[DEBUG][GCS-LOAD] ======== Starting load_vectorstore_from_gcs_in_memory ========")
+    print(f"[DEBUG][GCS-LOAD] Prefix: {gcs_prefix}")
+
+    try:
+        if "gcs_client" not in globals() or "gcs_bucket_name" not in globals():
+            raise RuntimeError("GCS client or bucket name not initialized in globals()")
+
+        print(f"[DEBUG][GCS-LOAD] Using bucket: {gcs_bucket_name}")
+        blobs = list(gcs_client.list_blobs(gcs_bucket_name, prefix=gcs_prefix))
+        if not blobs:
+            raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'.")
+
+        # Load FAISS index and docstore from memory buffers
+        index_file = None
+        docstore_file = None
+        for blob in blobs:
+            if blob.name.endswith(".faiss"):
+                index_file = blob.download_as_bytes()
+            elif blob.name.endswith(".pkl"):
+                docstore_file = blob.download_as_bytes()
+
+        if not index_file or not docstore_file:
+            raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'.")
+
+        
+        index_buffer = io.BytesIO(index_file)
+        index = faiss.read_index(index_buffer)
+
+        # Load docstore from bytes
+        docstore = pickle.loads(docstore_file)
+
+        # Construct FAISS object
+        vs = FAISS(embedding_function=embeddings, index=index)
+        vs.docstore = docstore
+
+        print(f"[DEBUG][GCS-LOAD] Successfully loaded FAISS store in memory.")
+        print(f"[DEBUG][GCS-LOAD] ======== Finished load_vectorstore_from_gcs_in_memory ========\n")
+
+        return vs
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR][GCS-LOAD] Exception: {type(e).__name__} - {e}")
+        traceback.print_exc()
+        raise
+
+
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
     Loads FAISS vector stores for all PDFs from GCS and inserts embeddings
-    into the DB, avoiding duplicates.
+    into the DB, avoiding duplicates. Compatible with InMemoryDocstore.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
 
     total_uploaded = 0
     total_skipped = 0
 
-    # -------------------------
-    # Step 0: Verify OpenAI API key
-    # -------------------------
-    openai_key = os.environ.get("OPENAI_API_KEY_S")
-    if not openai_key:
-        raise HTTPException(status_code=500, detail="OpenAI API key not set in environment variable OPENAI_API_KEY_S.")
-
-    embeddings_model = OpenAIEmbeddings(openai_api_key=openai_key)
-
     try:
         # -------------------------
-        # Step 1: Fetch PDFs from Google Drive
+        # Step 0: Fetch PDFs
         # -------------------------
         print("[DEBUG] Fetching PDF list from Google Drive...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
@@ -2020,8 +2070,10 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
+        embeddings_model = OpenAIEmbeddings()  # your embeddings instance
+
         # -------------------------
-        # Step 2: Process each PDF
+        # Step 1: Process vector stores
         # -------------------------
         for pdf_idx, pdf in enumerate(all_pdfs, start=1):
             pdf_name = pdf.get("name")
@@ -2031,53 +2083,53 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             gcs_prefix = os.path.join(parent_folder, f"vectorstore_{pdf_base_name}") + "/"
 
             print(f"\n[DEBUG] Processing PDF {pdf_idx}/{len(all_pdfs)}: {pdf_name}")
-            print(f"[DEBUG] PDF path: {pdf_path}, Parent folder: {parent_folder}")
             print(f"[DEBUG] Looking for vector store in GCS: {gcs_prefix}")
 
-            # Load FAISS vector store from GCS
             try:
-                vs = load_vectorstore_from_gcs(gcs_prefix, embeddings_model)
+                vs = load_vectorstore_from_gcs_in_memory(gcs_prefix, embeddings_model)
             except Exception as e:
                 print(f"[WARNING] Could not load vector store for PDF {pdf_name}: {e}")
                 continue
 
             # -------------------------
-            # Step 3: Iterate over FAISS docs
+            # Step 2: Iterate over FAISS docs
             # -------------------------
-            try:
-                for doc_id, doc in vs.docstore.items():
-                    try:
-                        embedding_vector = vs.index.reconstruct(doc_id).tolist()
-                    except Exception as e:
-                        print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
-                        continue
+            # Handle InMemoryDocstore properly
+            docstore_items = []
+            if hasattr(vs.docstore, "dict"):  # InMemoryDocstore has .dict attribute
+                docstore_items = vs.docstore.dict.items()
+            elif isinstance(vs.docstore, dict):
+                docstore_items = vs.docstore.items()
+            else:
+                raise RuntimeError(f"Unsupported docstore type: {type(vs.docstore)}")
 
-                    # Check for duplicates in DB
-                    existing = db.query(Embedding).filter_by(
-                        pdf_name=pdf_name,
-                        chunk_id=doc_id
-                    ).first()
+            for doc_id, doc in docstore_items:
+                try:
+                    embedding_vector = vs.index.reconstruct(doc_id).tolist()
+                except Exception as e:
+                    print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
+                    continue
 
-                    if existing:
-                        total_skipped += 1
-                        continue
+                # Skip duplicates
+                existing = db.query(Embedding).filter_by(
+                    pdf_name=pdf_name,
+                    chunk_id=doc_id
+                ).first()
+                if existing:
+                    total_skipped += 1
+                    continue
 
-                    new_embedding = Embedding(
-                        pdf_name=pdf_name,
-                        class_name=doc.metadata.get("class_name") if doc.metadata else None,
-                        chunk_id=doc_id,
-                        embedding_vector=json.dumps(embedding_vector)
-                    )
-                    db.add(new_embedding)
-                    total_uploaded += 1
+                new_embedding = Embedding(
+                    pdf_name=pdf_name,
+                    class_name=doc.metadata.get("class_name") if doc.metadata else None,
+                    chunk_id=doc_id,
+                    embedding_vector=json.dumps(embedding_vector)
+                )
+                db.add(new_embedding)
+                total_uploaded += 1
 
-                db.commit()
-                print(f"[DEBUG] Uploaded {total_uploaded} new embeddings so far. Skipped {total_skipped} duplicates.")
-
-            except Exception as e:
-                db.rollback()
-                print(f"[ERROR] Failed processing PDF {pdf_name}: {e}")
-                continue
+            db.commit()
+            print(f"[DEBUG] Uploaded {total_uploaded} new embeddings so far. Skipped {total_skipped} duplicates.")
 
         print(f"\n[DEBUG] Completed upload. Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
         return {
@@ -2086,10 +2138,9 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
     except Exception as e:
         db.rollback()
-        print(f"[ERROR] Failed to upload embeddings: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {e}")
-
-
+        print(f"[ERROR] Failed to upload embeddings: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+        
 
 @app.post("/admin/create_vectorstores")
 async def create_vectorstores():
