@@ -1992,55 +1992,73 @@ Guidelines:
 # Bulk upload endpoint
 def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
-    Loads a FAISS vector store from GCS directly into memory using a temporary file.
+    Load a FAISS vector store from GCS directly into memory.
 
     Args:
-        gcs_prefix (str): The folder/prefix in GCS where the vector store files are located.
-        embeddings (OpenAIEmbeddings): The embeddings object to use for loading the vector store.
+        gcs_prefix (str): The GCS prefix/folder where the FAISS index and docstore are stored.
+        embeddings (OpenAIEmbeddings): LangChain embeddings object.
 
     Returns:
-        FAISS: The loaded FAISS vector store instance.
+        FAISS: LangChain FAISS vectorstore fully loaded in memory.
     """
     print(f"\n[DEBUG][GCS-LOAD] ======== Starting load_vectorstore_from_gcs_in_memory ========")
     print(f"[DEBUG][GCS-LOAD] Prefix: {gcs_prefix}")
 
     try:
+        # Ensure GCS client and bucket are initialized
         if "gcs_client" not in globals() or "gcs_bucket_name" not in globals():
             raise RuntimeError("GCS client or bucket name not initialized in globals()")
 
-        print(f"[DEBUG][GCS-LOAD] Using bucket: {gcs_bucket_name}")
-        blobs = list(gcs_client.list_blobs(gcs_bucket_name, prefix=gcs_prefix))
+        # List blobs under prefix
+        bucket = gcs_client.bucket(gcs_bucket_name)
+        blobs = list(bucket.list_blobs(prefix=gcs_prefix))
         if not blobs:
             raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'.")
 
-        # Identify the index and docstore files
-        index_file_bytes = None
-        docstore_file_bytes = None
+        print(f"[DEBUG][GCS-LOAD] Found {len(blobs)} blobs in GCS prefix.")
+
+        # Find index and docstore files
+        index_bytes = None
+        docstore_bytes = None
         for blob in blobs:
             if blob.name.endswith(".faiss"):
-                index_file_bytes = blob.download_as_bytes()
+                index_bytes = blob.download_as_bytes()
+                print(f"[DEBUG][GCS-LOAD] Found FAISS index file: {blob.name}")
             elif blob.name.endswith(".pkl"):
-                docstore_file_bytes = blob.download_as_bytes()
+                docstore_bytes = blob.download_as_bytes()
+                print(f"[DEBUG][GCS-LOAD] Found docstore file: {blob.name}")
 
-        if not index_file_bytes or not docstore_file_bytes:
+        if not index_bytes or not docstore_bytes:
             raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'.")
 
-        # --- Load FAISS index using temporary file ---
-        with tempfile.NamedTemporaryFile() as tmp_index_file:
-            tmp_index_file.write(index_file_bytes)
-            tmp_index_file.flush()
-            index = faiss.read_index(tmp_index_file.name)
+        # --- Load FAISS index from bytes ---
+        index_buffer = io.BytesIO(index_bytes)
+        index = faiss.read_index(index_buffer.getbuffer())
+        print("[DEBUG][GCS-LOAD] FAISS index loaded into memory.")
 
-        # Load docstore from bytes
-        docstore = pickle.loads(docstore_file_bytes)
+        # --- Load docstore from bytes ---
+        docstore = pickle.loads(docstore_bytes)
+        print("[DEBUG][GCS-LOAD] Docstore loaded into memory.")
 
-        # Construct FAISS object
-        vs = FAISS(embedding_function=embeddings, index=index)
-        vs.docstore = docstore
+        # --- Build index_to_docstore_id mapping ---
+        if hasattr(docstore, "_dict"):
+            index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore._dict.keys())}
+        elif isinstance(docstore, dict):
+            index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore.keys())}
+        else:
+            raise RuntimeError(f"Unsupported docstore type: {type(docstore)}")
+        print(f"[DEBUG][GCS-LOAD] index_to_docstore_id mapping created with {len(index_to_docstore_id)} items.")
+
+        # --- Construct LangChain FAISS object ---
+        vs = FAISS(
+            embedding_function=embeddings,
+            index=index,
+            docstore=docstore,
+            index_to_docstore_id=index_to_docstore_id
+        )
 
         print(f"[DEBUG][GCS-LOAD] Successfully loaded FAISS store in memory.")
         print(f"[DEBUG][GCS-LOAD] ======== Finished load_vectorstore_from_gcs_in_memory ========\n")
-
         return vs
 
     except Exception as e:
