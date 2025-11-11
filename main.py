@@ -1619,15 +1619,22 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
         print(f"[INFO] API usage logged in database for user_id={user_id}")
 
     return is_educational
-
 def get_top_k_chunks_from_db(query_text: str, class_names: list, db: Session, top_k: int = 5):
+    import os, json, numpy as np
+    from langchain.embeddings import OpenAIEmbeddings
+
+    # Initialize embeddings model
     embeddings_model = OpenAIEmbeddings(
         model="text-embedding-3-large",
         openai_api_key=os.environ.get("OPENAI_API_KEY_S")
     )
-    query_vector = embeddings_model.embed_query(query_text)
 
-    # Filter embeddings by class_name if provided
+    # Embed the query
+    query_vector = embeddings_model.embed_query(query_text)
+    query_vec = np.array(query_vector)
+    query_vec_norm = query_vec / (np.linalg.norm(query_vec) + 1e-10)  # safe normalization
+
+    # Fetch embeddings from DB
     q = db.query(Embedding)
     if class_names:
         q = q.filter(Embedding.class_name.in_(class_names))
@@ -1635,6 +1642,7 @@ def get_top_k_chunks_from_db(query_text: str, class_names: list, db: Session, to
     if not all_embeddings:
         return []
 
+    # Load vectors and corresponding docs
     vectors = []
     docs = []
     for emb in all_embeddings:
@@ -1642,17 +1650,20 @@ def get_top_k_chunks_from_db(query_text: str, class_names: list, db: Session, to
         docs.append(emb)
 
     vectors = np.stack(vectors)
-    
-    # Cosine similarity
-    query_vec = np.array(query_vector)
-    vectors_norm = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-    query_vec_norm = query_vec / np.linalg.norm(query_vec)
+    vectors_norm = vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-10)
+
+    # Compute cosine similarity
     sims = vectors_norm @ query_vec_norm
 
+    # Handle top_k greater than available embeddings
+    top_k = min(top_k, len(all_embeddings))
     top_indices = sims.argsort()[-top_k:][::-1]
+
+    # Return tuples of (doc, score) to match your current usage
     top_chunks = [(docs[i], float(sims[i])) for i in top_indices]
+
     return top_chunks
-    
+
 
     
 @app.get("/search")
@@ -1877,23 +1888,17 @@ async def search_pdfs(
         print("==================== SEARCH REQUEST END ====================\n")
         return JSONResponse(results)
 
-    
 
+    
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
-    #here
     context_texts_str = ""
     if pdf_files and not use_context_only:
         class_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
-        print(f"[DEBUG] Query: {query}")
-        print(f"[DEBUG] Class list for DB lookup: {class_list}")
-        print(f"[DEBUG] Attempting to fetch top {TOP_K} chunks from DB")
-         # ===== DEBUG: Inspect first 10 entries in the embeddings table =====
-        db_chunks = db.query(PDFChunkTable).limit(10).all()
-        for i, c in enumerate(db_chunks):
-            print(f"[DEBUG] DB row {i+1}: pdf_name={c.pdf_name}, class_name={c.class_name}, chunk_id={c.chunk_id}")
-        
+        print(f"[DEBUG] Attempting to fetch top {TOP_K} chunks from DB (embeddings table)")
+    
+        # Fetch top-k chunks from embeddings table
         top_chunks = get_top_k_chunks_from_db(query, class_list, db, top_k=TOP_K)
-        
+    
         if top_chunks:
             print(f"[DEBUG] Found {len(top_chunks)} chunks from DB")
             context_texts = [
@@ -1901,10 +1906,13 @@ async def search_pdfs(
                 for doc, _ in top_chunks
             ]
             context_texts_str = "\n".join(context_texts)
+            for idx, (doc, score) in enumerate(top_chunks):
+                print(f"[DEBUG] Chunk {idx+1}: pdf_name={doc.pdf_name}, chunk_id={doc.chunk_id}, score={score}, snippet={doc.chunk_text[:100]}")
         else:
-            print(f"[DEBUG] No top chunks found in DB, GPT will rely on context only")
+            print(f"[DEBUG] No top chunks found, GPT will rely on context or external knowledge")
             use_context_only = True
-        #till here
+
+        
         for idx, (doc, score) in enumerate(top_chunks[:5]):  # show first 5 for brevity
             print(f"[DEBUG] Chunk {idx+1}: pdf_name={getattr(doc, 'pdf_name', 'N/A')}, score={score}, text_preview={getattr(doc,'chunk_text','')[:100]}")
 
