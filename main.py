@@ -1732,35 +1732,32 @@ async def search_pdfs(
     
 
     # -------------------- Step 0: Context gist --------------------
+    # -------------------- Step 0: Context gist --------------------
+    # -------------------- Step 0: Context gist --------------------
     context_gist = get_context_gist(user_id)
     is_first_query = len(user_contexts[user_id]) == 0
     
-    # Route
-    class_names = [cn.strip().lower() for cn in class_name.split(",")]
-
-        # Keep PDFs whose path starts with any of the folder names
-    pdf_files = [
-    pdf for pdf in all_pdfs
-    if any(pdf.get("path", "").lower().startswith(cn) for cn in class_names)
-    ]
-
-    print(f"[DEBUG] PDFs matching classes {class_names}: {len(pdf_files)}")
-    # ===== DEBUG: Inspect PDF selection =====
+    # Normalize and split class names
+    class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
+    
+    # Function to normalize PDF paths
+    def normalize_path(path: str) -> str:
+        path = path.lower().strip()
+        path = path.replace("  ", " ")            # remove double spaces
+        path = path.replace(".pdf.pdf", ".pdf")   # fix double suffix
+        path = path.replace("- ", "-")            # normalize hyphen spacing
+        return path
+    
+    # ===== DEBUG: Inspect PDF filtering =====
     print("\n===== DEBUG: PDF Filtering =====")
     print(f"[INFO] class_name input from query: '{class_name}'")
-    class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
-    print(f"[INFO] Split and lowercased class_names: {class_names_list}")
-    
+    print(f"[INFO] Split and normalized class_names: {class_names_list}")
     print(f"[INFO] Total PDFs in all_pdfs: {len(all_pdfs)}")
-    for idx, pdf in enumerate(all_pdfs):
-        pdf_path_lower = pdf.get("path", "").lower()
-        print(f"  PDF {idx+1}: name='{pdf['name']}', path='{pdf_path_lower}'")
     
-    # Check which PDFs match any class_name
     pdf_files_debug = []
     for pdf in all_pdfs:
-        pdf_path_lower = pdf.get("path", "").lower()
-        matched_classes = [cn for cn in class_names_list if cn in pdf_path_lower]
+        pdf_path_norm = normalize_path(pdf.get("path", ""))
+        matched_classes = [cn for cn in class_names_list if cn in pdf_path_norm]
         if matched_classes:
             pdf_files_debug.append(pdf)
             print(f"[MATCH] PDF '{pdf['name']}' matched class(es): {matched_classes}")
@@ -1771,13 +1768,17 @@ async def search_pdfs(
         print(f"[INFO] Total PDFs matched: {len(pdf_files_debug)}")
     print("===== END DEBUG =====\n")
     
-    # Use this for downstream logic temporarily
+    # Use this normalized list for downstream logic
     pdf_files = pdf_files_debug
-
+    
+    # Print final matched PDFs
     for pdf in pdf_files:
-        print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")    
+        print(f"[DEBUG]   {pdf['name']} | Path: {pdf['path']}")
+    
+    # Summary
     print(f"[DEBUG] class_names passed from query: {class_name}")
-    print(f"[DEBUG] PDF paths lowercased for comparison: {[pdf.get('path','').lower() for pdf in all_pdfs]}")
+    print(f"[DEBUG] Lowercased PDF paths for comparison: {[normalize_path(pdf.get('path', '')) for pdf in all_pdfs]}")
+
 
         
     query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
