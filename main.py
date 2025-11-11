@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float, func, ARRAY
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 
@@ -183,10 +183,10 @@ class Embedding(Base):
     pdf_name = Column(String, nullable=False)
     class_name = Column(String, nullable=True)
     chunk_id = Column(String, nullable=False)
-    embedding_vector = Column(Vector(1536))  # numeric vector for similarity search
+    embedding_vector = Column(ARRAY(Float), nullable=False)  # store as array
     chunk_text = Column(Text, nullable=False)
     page_number = Column(Integer, nullable=False)
-    chunk_index = Column(Integer, nullable=False)    
+    chunk_index = Column(Integer, nullable=False)
 
 class GuestChatbotMessage(BaseModel):
     role: str
@@ -2322,11 +2322,12 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
     try:
         # Step 0: Fetch PDFs
         print("[DEBUG] Fetching PDF list from Google Drive...")
-        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        all_pdfs = list_pdfs(os.environ.get("DEMO_FOLDER_ID", ""))
         if not all_pdfs:
             raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
+        # Initialize embeddings model
         embeddings_model = OpenAIEmbeddings(
             model="text-embedding-3-large",
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
@@ -2363,10 +2364,13 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 metadata = getattr(doc, "metadata", {}) or {}
                 chunk_text = metadata.get("chunk_text") or getattr(doc, "page_content", None) or ""
                 class_name = metadata.get("class_name")
+                page_number = metadata.get("page_number", 0)
+                chunk_index = metadata.get("chunk_index", 0)
 
                 try:
+                    # Reconstruct embedding as a numeric list
                     internal_id = vs.index_to_docstore_id_inverse[doc_id]
-                    embedding_vector = vs.index.reconstruct(internal_id).tolist()  # numeric array
+                    embedding_vector = vs.index.reconstruct(internal_id).tolist()  # list of floats
                 except Exception as e:
                     print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
                     continue
@@ -2380,13 +2384,15 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                     total_skipped += 1
                     continue
 
-                # Create numeric embedding entry
+                # Insert embedding into DB
                 new_embedding = Embedding(
                     pdf_name=pdf_name,
                     class_name=class_name,
                     chunk_id=doc_id,
-                    embedding_vector=embedding_vector,  # ✅ numeric array
-                    chunk_text=chunk_text
+                    embedding_vector=embedding_vector,  # ✅ numeric array stored in ARRAY(Float)
+                    chunk_text=chunk_text,
+                    page_number=page_number,
+                    chunk_index=chunk_index
                 )
                 db.add(new_embedding)
                 total_uploaded += 1
