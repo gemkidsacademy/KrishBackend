@@ -1994,18 +1994,18 @@ Guidelines:
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
     Reads vector store JSON files from Google Cloud Storage for each PDF
-    and uploads embeddings to the Railway DB table.
+    and uploads embeddings to the Railway DB table, avoiding duplicates.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
 
     total_uploaded = 0
+    total_skipped = 0
 
     try:
         # -------------------------
         # Step 0: Populate all_pdfs
         # -------------------------
         print("[DEBUG] Fetching PDF list from Google Drive...")
-        # Use the global DEMO_FOLDER_ID
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
 
         if not all_pdfs:
@@ -2024,7 +2024,6 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             print(f"\n[DEBUG] Processing PDF {pdf_idx}/{len(all_pdfs)}: {pdf_name}")
             print(f"[DEBUG] PDF path: {pdf_path}, Parent folder: {parent_folder}")
 
-            # Exact vector store folder for this PDF
             vectorstore_prefix = os.path.join(parent_folder, f"vectorstore_{pdf_base_name}") + "/"
             print(f"[DEBUG] Looking for vector store folder in GCS: {vectorstore_prefix}")
 
@@ -2043,7 +2042,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
                 print(f"[DEBUG] Downloading blob content: {blob.name}")
                 data = blob.download_as_text()
-                
+
                 try:
                     vector_data = json.loads(data)
                 except json.JSONDecodeError as e:
@@ -2058,6 +2057,19 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                         print(f"[WARNING] Skipping chunk {chunk_idx} without embedding: {item}")
                         continue
 
+                    # -------------------------
+                    # Check if embedding already exists
+                    # -------------------------
+                    existing = db.query(Embedding).filter_by(
+                        pdf_name=item.get("pdf_name"),
+                        chunk_id=item.get("chunk_id")
+                    ).first()
+
+                    if existing:
+                        print(f"[INFO] Skipping existing embedding chunk {chunk_idx} from blob {blob.name}")
+                        total_skipped += 1
+                        continue
+
                     embedding_str = json.dumps(embedding_vector)
 
                     new_embedding = Embedding(
@@ -2068,16 +2080,20 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                     )
                     db.add(new_embedding)
                     total_uploaded += 1
-                    print(f"[DEBUG] Uploaded embedding chunk {chunk_idx} from blob {blob.name}")
+                    print(f"[DEBUG] Uploaded new embedding chunk {chunk_idx} from blob {blob.name}")
 
         db.commit()
-        print(f"\n[DEBUG] Successfully uploaded {total_uploaded} embeddings to DB")
-        return {"message": f"Successfully uploaded {total_uploaded} embeddings to the DB."}
+        print(f"\n[DEBUG] Successfully uploaded {total_uploaded} new embeddings to DB")
+        print(f"[DEBUG] Skipped {total_skipped} embeddings already existing in DB")
+        return {
+            "message": f"Uploaded {total_uploaded} new embeddings. Skipped {total_skipped} duplicates."
+        }
 
     except Exception as e:
         db.rollback()
         print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
+
 
 
 
