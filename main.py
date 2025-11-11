@@ -1992,8 +1992,8 @@ Guidelines:
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
-    Reads vector store files (JSON, FAISS PKL, or tuple PKL) from Google Cloud Storage
-    for each PDF and uploads embeddings to the DB table, avoiding duplicates.
+    Loads FAISS vector stores for all PDFs from GCS and inserts embeddings
+    into the DB, avoiding duplicates.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
 
@@ -2001,122 +2001,78 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
     total_skipped = 0
 
     try:
-        # Step 0: Get all PDFs
+        # -------------------------
+        # Step 0: Fetch PDFs
+        # -------------------------
         print("[DEBUG] Fetching PDF list from Google Drive...")
-        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)  # your existing method
         if not all_pdfs:
-            raise HTTPException(status_code=404, detail="No PDFs found to process vector stores.")
+            raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
+
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
-        # Step 1: Process each PDF's vector store
+        embeddings_model = OpenAIEmbeddings()  # or your existing embeddings instance
+
+        # -------------------------
+        # Step 1: Process vector stores
+        # -------------------------
         for pdf_idx, pdf in enumerate(all_pdfs, start=1):
             pdf_name = pdf.get("name")
             pdf_path = pdf.get("path")
             pdf_base_name = pdf_name.rsplit(".", 1)[0]
             parent_folder = os.path.dirname(pdf_path)
+            gcs_prefix = os.path.join(parent_folder, f"vectorstore_{pdf_base_name}") + "/"
 
             print(f"\n[DEBUG] Processing PDF {pdf_idx}/{len(all_pdfs)}: {pdf_name}")
-            vectorstore_prefix = os.path.join(parent_folder, f"vectorstore_{pdf_base_name}") + "/"
-            print(f"[DEBUG] Looking for vector store folder in GCS: {vectorstore_prefix}")
+            print(f"[DEBUG] PDF path: {pdf_path}, Parent folder: {parent_folder}")
+            print(f"[DEBUG] Looking for vector store in GCS: {gcs_prefix}")
 
-            blobs = list(gcs_bucket.list_blobs(prefix=vectorstore_prefix))
-            print(f"[DEBUG] Found {len(blobs)} files in vector store folder.")
-            if not blobs:
-                print(f"[WARNING] No vector store files found for PDF: {pdf_name}")
+            try:
+                vs = load_vectorstore_from_gcs(gcs_prefix, embeddings_model)
+            except Exception as e:
+                print(f"[WARNING] Could not load vector store for PDF {pdf_name}: {e}")
                 continue
 
-            for blob_idx, blob in enumerate(blobs, start=1):
-                print(f"[DEBUG] Checking blob {blob_idx}/{len(blobs)}: {blob.name}")
-                if blob.name.endswith(".json"):
-                    # JSON vector store
-                    print(f"[DEBUG] Downloading JSON blob: {blob.name}")
-                    data = blob.download_as_text()
-                    try:
-                        vector_data = json.loads(data)
-                    except json.JSONDecodeError as e:
-                        print(f"[ERROR] Failed to parse JSON blob {blob.name}: {e}")
-                        continue
+            # -------------------------
+            # Step 2: Iterate over FAISS docs
+            # -------------------------
+            for doc_id, doc in vs.docstore.items():
+                try:
+                    embedding_vector = vs.index.reconstruct(doc_id).tolist()
+                except Exception as e:
+                    print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
+                    continue
 
-                    for chunk_idx, item in enumerate(vector_data, start=1):
-                        embedding_vector = item.get("embedding")
-                        if not embedding_vector:
-                            print(f"[WARNING] Skipping chunk {chunk_idx} without embedding.")
-                            continue
+                # Check for duplicates
+                existing = db.query(Embedding).filter_by(
+                    pdf_name=pdf_name,
+                    chunk_id=doc_id
+                ).first()
 
-                        existing = db.query(Embedding).filter_by(
-                            pdf_name=item.get("pdf_name"),
-                            chunk_id=item.get("chunk_id")
-                        ).first()
-                        if existing:
-                            total_skipped += 1
-                            continue
+                if existing:
+                    total_skipped += 1
+                    continue
 
-                        db.add(Embedding(
-                            pdf_name=item.get("pdf_name"),
-                            class_name=item.get("class_name"),
-                            chunk_id=item.get("chunk_id"),
-                            embedding_vector=json.dumps(embedding_vector)
-                        ))
-                        total_uploaded += 1
+                new_embedding = Embedding(
+                    pdf_name=pdf_name,
+                    class_name=doc.metadata.get("class_name") if doc.metadata else None,
+                    chunk_id=doc_id,
+                    embedding_vector=json.dumps(embedding_vector)
+                )
+                db.add(new_embedding)
+                total_uploaded += 1
 
-                elif blob.name.endswith(".pkl"):
-                    print(f"[DEBUG] Downloading PKL blob: {blob.name}")
-                    pkl_bytes = blob.download_as_bytes()
-                    try:
-                        obj = pickle.loads(pkl_bytes)
-                    except Exception as e:
-                        print(f"[ERROR] Failed to load PKL blob {blob.name}: {e}")
-                        continue
+            db.commit()
+            print(f"[DEBUG] Uploaded {total_uploaded} new embeddings so far. Skipped {total_skipped} duplicates.")
 
-                    # Handle tuple PKL (docstore, FAISS index)
-                    if isinstance(obj, tuple) and len(obj) == 2:
-                        docstore, faiss_index = obj
-                        if not isinstance(docstore, InMemoryDocstore):
-                            print(f"[WARNING] Unknown docstore type: {type(docstore)}. Skipping.")
-                            continue
-
-                        if not isinstance(faiss_index, FAISS):
-                            print(f"[WARNING] Unknown FAISS index type: {type(faiss_index)}. Skipping.")
-                            continue
-
-                        # Reconstruct embeddings manually
-                        if hasattr(faiss_index, "index") and hasattr(docstore, "dict"):
-                            for doc_id, text in docstore.dict.items():
-                                try:
-                                    vector = faiss_index.index.reconstruct(int(doc_id))
-                                except Exception as e:
-                                    print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
-                                    continue
-
-                                existing = db.query(Embedding).filter_by(
-                                    pdf_name=pdf_name,
-                                    chunk_id=doc_id
-                                ).first()
-                                if existing:
-                                    total_skipped += 1
-                                    continue
-
-                                db.add(Embedding(
-                                    pdf_name=pdf_name,
-                                    class_name="N/A",
-                                    chunk_id=doc_id,
-                                    embedding_vector=json.dumps(vector.tolist())
-                                ))
-                                total_uploaded += 1
-                        else:
-                            print(f"[WARNING] Tuple PKL missing expected attributes, skipping blob {blob.name}.")
-                    else:
-                        print(f"[WARNING] Unknown PKL type: {type(obj)}. Skipping blob {blob.name}.")
-                else:
-                    print(f"[DEBUG] Skipping unsupported blob type: {blob.name}")
-
-        db.commit()
-        print(f"\n[DEBUG] Uploaded {total_uploaded} new embeddings. Skipped {total_skipped} duplicates.")
-        return {"message": f"Uploaded {total_uploaded} new embeddings. Skipped {total_skipped} duplicates."}
+        print(f"\n[DEBUG] Completed upload. Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
+        return {
+            "message": f"Uploaded {total_uploaded} new embeddings. Skipped {total_skipped} duplicates."
+        }
 
     except Exception as e:
         db.rollback()
-        print(f"[ERROR] Failed to upload embeddings: {e}")
+        print(f"[ERROR] Failed to upload embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")  
 
 
