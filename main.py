@@ -183,7 +183,7 @@ class Embedding(Base):
     pdf_name = Column(String, nullable=False)
     class_name = Column(String, nullable=True)
     chunk_id = Column(String, nullable=False)
-    embedding_vector = Column(VECTOR(1536))  # numeric vector for similarity search
+    embedding_vector = Column(Vector(1536))  # numeric vector for similarity search
     chunk_text = Column(Text, nullable=False)
     page_number = Column(Integer, nullable=False)
     chunk_index = Column(Integer, nullable=False)    
