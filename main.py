@@ -120,7 +120,18 @@ openai_client = OpenAI(
 # 1. Fetch all embeddings from Postgres
 all_embeddings = db.query(Embedding).all()
 vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
-metadata = [{"pdf_name": e.pdf_name, "class_name": e.class_name, "chunk_index": e.chunk_index, ...} for e in all_embeddings]
+metadata = [
+    {
+        "pdf_name": e.pdf_name,
+        "class_name": e.class_name,
+        "page_number": e.page_number,
+        "chunk_index": e.chunk_index,
+        "pdf_link": e.pdf_link,
+        "chunk_text": e.chunk_text
+    }
+    for e in all_embeddings
+]
+
 
 # 2. Build FAISS index
 d = vectors.shape[1]  # embedding dimension, e.g., 3072
