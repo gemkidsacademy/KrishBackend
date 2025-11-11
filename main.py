@@ -6,6 +6,7 @@ import pandas as pd
 from cachetools import TTLCache
 import re 
 from langchain_core.documents import Document
+import faiss
 
 #Twilio API
 from twilio.rest import Client
