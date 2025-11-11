@@ -1891,26 +1891,39 @@ async def search_pdfs(
 
     
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
+    
     context_texts_str = ""
     if pdf_files and not use_context_only:
+        # Normalize class names for DB filtering
         class_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
-        print(f"[DEBUG] Attempting to fetch top {TOP_K} chunks from DB (embeddings table)")
-    
-        # Fetch top-k chunks from embeddings table
+        print(f"[DEBUG] class_list for DB filtering: {class_list}")
+        print(f"[DEBUG] Query length: {len(query)} characters")
+        
+        # Fetch top-k chunks from embeddings table using similarity search
         top_chunks = get_top_k_chunks_from_db(query, class_list, db, top_k=TOP_K)
-    
+        print(f"[DEBUG] top_chunks returned from DB: {len(top_chunks)}")
+        
         if top_chunks:
-            print(f"[DEBUG] Found {len(top_chunks)} chunks from DB")
-            context_texts = [
-                f"PDF: {doc.pdf_name} (Chunk {doc.chunk_id})\n{doc.chunk_text}"
-                for doc, _ in top_chunks
-            ]
-            context_texts_str = "\n".join(context_texts)
+            # Build context string using actual DB model attributes
+            context_texts = []
             for idx, (doc, score) in enumerate(top_chunks):
-                print(f"[DEBUG] Chunk {idx+1}: pdf_name={doc.pdf_name}, chunk_id={doc.chunk_id}, score={score}, snippet={doc.chunk_text[:100]}")
+                pdf_name = doc.metadata.get('pdf_name', 'N/A')
+                page_num = doc.metadata.get('page_number', 'N/A')
+                snippet_preview = doc.page_content[:100] if doc.page_content else "[EMPTY]"
+                if not doc.page_content.strip():
+                    print(f"[WARN] Chunk {idx+1} has empty page_content! pdf_name={pdf_name}")
+                
+                print(f"[DEBUG] Chunk {idx+1}: pdf_name={pdf_name}, page={page_num}, score={score}, snippet_preview={snippet_preview}")
+                
+                context_texts.append(f"PDF: {pdf_name} (Page {page_num})\n{doc.page_content}")
+            
+            context_texts_str = "\n".join(context_texts)
+            print(f"[DEBUG] Total context_texts_str length: {len(context_texts_str)} characters")
         else:
             print(f"[DEBUG] No top chunks found, GPT will rely on context or external knowledge")
             use_context_only = True
+
+        
 
         
         for idx, (doc, score) in enumerate(top_chunks[:5]):  # show first 5 for brevity
