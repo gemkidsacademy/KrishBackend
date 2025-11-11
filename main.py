@@ -2000,21 +2000,28 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
     total_uploaded = 0
     total_skipped = 0
 
+    # -------------------------
+    # Step 0: Verify OpenAI API key
+    # -------------------------
+    openai_key = os.environ.get("OPENAI_API_KEY_S")
+    if not openai_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not set in environment variable OPENAI_API_KEY_S.")
+
+    embeddings_model = OpenAIEmbeddings(openai_api_key=openai_key)
+
     try:
         # -------------------------
-        # Step 0: Fetch PDFs
+        # Step 1: Fetch PDFs from Google Drive
         # -------------------------
         print("[DEBUG] Fetching PDF list from Google Drive...")
-        all_pdfs = list_pdfs(DEMO_FOLDER_ID)  # your existing method
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)
         if not all_pdfs:
             raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
 
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
-        embeddings_model = OpenAIEmbeddings()  # or your existing embeddings instance
-
         # -------------------------
-        # Step 1: Process vector stores
+        # Step 2: Process each PDF
         # -------------------------
         for pdf_idx, pdf in enumerate(all_pdfs, start=1):
             pdf_name = pdf.get("name")
@@ -2027,6 +2034,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             print(f"[DEBUG] PDF path: {pdf_path}, Parent folder: {parent_folder}")
             print(f"[DEBUG] Looking for vector store in GCS: {gcs_prefix}")
 
+            # Load FAISS vector store from GCS
             try:
                 vs = load_vectorstore_from_gcs(gcs_prefix, embeddings_model)
             except Exception as e:
@@ -2034,36 +2042,42 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 continue
 
             # -------------------------
-            # Step 2: Iterate over FAISS docs
+            # Step 3: Iterate over FAISS docs
             # -------------------------
-            for doc_id, doc in vs.docstore.items():
-                try:
-                    embedding_vector = vs.index.reconstruct(doc_id).tolist()
-                except Exception as e:
-                    print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
-                    continue
+            try:
+                for doc_id, doc in vs.docstore.items():
+                    try:
+                        embedding_vector = vs.index.reconstruct(doc_id).tolist()
+                    except Exception as e:
+                        print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
+                        continue
 
-                # Check for duplicates
-                existing = db.query(Embedding).filter_by(
-                    pdf_name=pdf_name,
-                    chunk_id=doc_id
-                ).first()
+                    # Check for duplicates in DB
+                    existing = db.query(Embedding).filter_by(
+                        pdf_name=pdf_name,
+                        chunk_id=doc_id
+                    ).first()
 
-                if existing:
-                    total_skipped += 1
-                    continue
+                    if existing:
+                        total_skipped += 1
+                        continue
 
-                new_embedding = Embedding(
-                    pdf_name=pdf_name,
-                    class_name=doc.metadata.get("class_name") if doc.metadata else None,
-                    chunk_id=doc_id,
-                    embedding_vector=json.dumps(embedding_vector)
-                )
-                db.add(new_embedding)
-                total_uploaded += 1
+                    new_embedding = Embedding(
+                        pdf_name=pdf_name,
+                        class_name=doc.metadata.get("class_name") if doc.metadata else None,
+                        chunk_id=doc_id,
+                        embedding_vector=json.dumps(embedding_vector)
+                    )
+                    db.add(new_embedding)
+                    total_uploaded += 1
 
-            db.commit()
-            print(f"[DEBUG] Uploaded {total_uploaded} new embeddings so far. Skipped {total_skipped} duplicates.")
+                db.commit()
+                print(f"[DEBUG] Uploaded {total_uploaded} new embeddings so far. Skipped {total_skipped} duplicates.")
+
+            except Exception as e:
+                db.rollback()
+                print(f"[ERROR] Failed processing PDF {pdf_name}: {e}")
+                continue
 
         print(f"\n[DEBUG] Completed upload. Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
         return {
@@ -2072,9 +2086,8 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
     except Exception as e:
         db.rollback()
-        print(f"[ERROR] Failed to upload embeddings: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")  
-
+        print(f"[ERROR] Failed to upload embeddings: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {e}")
 
 
 
