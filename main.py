@@ -2070,7 +2070,10 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
-        embeddings_model = OpenAIEmbeddings()  # your embeddings instance
+        embeddings_model = OpenAIEmbeddings(
+            model="text-embedding-ada-002",
+            openai_api_key=os.environ.get("OPENAI_API_KEY_S")  # make sure this is set
+            )
 
         # -------------------------
         # Step 1: Process vector stores
