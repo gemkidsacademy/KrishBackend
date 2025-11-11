@@ -339,27 +339,8 @@ def get_db():
     finally:
         db.close()
         
-# 1. Fetch all embeddings from Postgres
-all_embeddings = db.query(Embedding).all()
-vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
-metadata = [
-    {
-        "pdf_name": e.pdf_name,
-        "class_name": e.class_name,
-        "page_number": e.page_number,
-        "chunk_index": e.chunk_index,
-        "pdf_link": e.pdf_link,
-        "chunk_text": e.chunk_text
-    }
-    for e in all_embeddings
-]
 
 
-# 2. Build FAISS index
-d = vectors.shape[1]  # embedding dimension, e.g., 3072
-index = faiss.IndexFlatIP(d)  # IP = inner product (for cosine similarity)
-faiss.normalize_L2(vectors)    # normalize for cosine similarity
-index.add(vectors)
 # Generate OTP
 def generate_otp():
     return random.randint(100000, 999999)
@@ -2070,6 +2051,32 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         print(f"[ERROR][GCS-LOAD] Exception: {type(e).__name__} - {e}")
         traceback.print_exc()
         raise
+
+@app.get("/admin/initialize_faiss")
+def initialize_faiss(db: Session = Depends(get_db)):
+    all_embeddings = db.query(Embedding).all()
+    
+    vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
+    metadata = [
+        {
+            "pdf_name": e.pdf_name,
+            "class_name": e.class_name,
+            "page_number": e.page_number,
+            "chunk_index": e.chunk_index,
+            "pdf_link": e.pdf_link,
+            "chunk_text": e.chunk_text
+        }
+        for e in all_embeddings
+    ]
+
+    # Build FAISS index
+    d = vectors.shape[1]
+    index = faiss.IndexFlatIP(d)
+    faiss.normalize_L2(vectors)
+    index.add(vectors)
+
+    return {"message": "FAISS index initialized", "num_embeddings": len(all_embeddings)}
+
 
 @app.post("/admin/create_vectorstores")
 async def create_vectorstores():
