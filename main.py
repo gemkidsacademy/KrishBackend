@@ -1751,7 +1751,7 @@ async def search_pdfs(
     print(f"[DEBUG] PDF paths lowercased for comparison: {[pdf.get('path','').lower() for pdf in all_pdfs]}")
 
         
-        query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
+    query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
 
     
     if is_first_query:
