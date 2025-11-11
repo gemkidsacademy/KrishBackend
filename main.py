@@ -1844,14 +1844,8 @@ async def search_pdfs(
 
     # -------------------- Step 1: Retrieve PDFs --------------------
     # -------------------- Step 1: Retrieve PDFs --------------------
-    pdf_files = []
-    if query_type in ("pdf_only", "mixed") and class_name:
-        
-        
-        # Split class_name into a list of folder names, trimming whitespace
-        #here
-        
-
+    
+    if query_type in ("pdf_only", "mixed") and class_name:     
         if not pdf_files:
             print(f"[WARNING] No PDFs found for '{class_name}'. GPT will fallback to context-only or external knowledge")
             use_context_only = True
