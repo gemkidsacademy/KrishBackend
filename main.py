@@ -8,6 +8,9 @@ import re
 from langchain_core.documents import Document
 import faiss
 
+from pgvector.sqlalchemy import Vector
+
+
 #Twilio API
 from twilio.rest import Client
 # FastAPI & Pydantic
@@ -18,7 +21,7 @@ from passlib.hash import pbkdf2_sha256
 # SQLAlchemy
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float, func
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 
 # Password hashing
 from passlib.context import CryptContext
@@ -176,12 +179,12 @@ class OpenAIUsageLog(Base):
 class Embedding(Base):
     __tablename__ = "embeddings"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    pdf_name = Column(String(255), nullable=False)
-    class_name = Column(String(255), nullable=True)
-    chunk_id = Column(String(255), nullable=True)
-    embedding_vector = Column(Text, nullable=False)  # store JSON string of the embedding
-    chunk_text = Column(Text, nullable=True)
+    id = Column(Integer, primary_key=True)
+    pdf_name = Column(String)
+    class_name = Column(String)
+    chunk_id = Column(String)
+    embedding_vector = Column(Vector(1536))  # text-embedding-3-large has 1536 dims
+    chunk_text = Column(Text)
     
 
 class GuestChatbotMessage(BaseModel):
@@ -2260,9 +2263,10 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
         embeddings_model = OpenAIEmbeddings(
-            model="text-embedding-ada-002",
+            model="text-embedding-3-large",
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
+
 
         # Step 1: Process vector stores
         for pdf_idx, pdf in enumerate(all_pdfs, start=1):
@@ -2319,10 +2323,11 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                     pdf_name=pdf_name,
                     class_name=class_name,
                     chunk_id=doc_id,
-                    embedding_vector=json.dumps(embedding_vector),
+                    embedding_vector=embedding_vector,  # ✅ directly as numeric array
                     chunk_text=safe_chunk_text
                 )
-                db.add(new_embedding)                
+                db.add(new_embedding)
+                                
                 total_uploaded += 1
                 uploaded_this_pdf += 1
 
