@@ -1916,6 +1916,7 @@ async def search_pdfs(
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
+    # -------------------- Step 2: Retrieve relevant PDF chunks --------------------
     context_texts_str = ""
     
     if pdf_files and not use_context_only:
@@ -1938,18 +1939,16 @@ async def search_pdfs(
             context_texts_str = "\n".join(context_texts)
             print(f"[DEBUG] Context texts prepared from DB chunks, total length: {len(context_texts_str)} chars")
     
-        # Debug: Show all retrieved PDF names
-        pdf_names_in_db = [chunk.pdf_name for chunk, _ in top_chunks]
-        for cn in class_list:
-            matched = [name for name in pdf_names_in_db if cn.lower() in name.lower()]
-            if matched:
-                print(f"[DEBUG] Class '{cn}' matched PDFs: {matched}")
-            else:
-                print(f"[WARN] Class '{cn}' did NOT match any PDFs in DB!")
+            # Debug: Show all retrieved PDF names
+            pdf_names_in_db = [chunk.pdf_name for chunk, _ in top_chunks]
+            for cn in class_list:
+                matched = [name for name in pdf_names_in_db if cn.lower() in name.lower()]
+                if matched:
+                    print(f"[DEBUG] Class '{cn}' matched PDFs: {matched}")
+                else:
+                    print(f"[WARN] Class '{cn}' did NOT match any PDFs in DB!")
     
-    print(f"[DEBUG] use_context_only={use_context_only}, number of top_chunks={len(top_chunks) if top_chunks else 0}")
-
-            #till here
+            print(f"[DEBUG] use_context_only={use_context_only}, number of top_chunks={len(top_chunks)}")
     
             # Sort top_chunks by score (descending = most relevant first)
             top_chunks = sorted(top_chunks, key=lambda x: x[1], reverse=True)[:TOP_K]
@@ -1967,11 +1966,6 @@ async def search_pdfs(
             ]
             context_texts_str = "\n".join(context_texts)
             print(f"[DEBUG] Context texts prepared, total length: {len(context_texts_str)} characters")
-    
-        else:
-            print(f"[DEBUG] No top chunks found from DB. GPT will rely on context or external knowledge")
-            use_context_only = True
-
 
     # -------------------- Step 3: Prepare GPT prompt --------------------
     reasoning_instruction = {
