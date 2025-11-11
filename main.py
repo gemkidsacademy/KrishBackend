@@ -1993,31 +1993,21 @@ Guidelines:
 def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
     Load a FAISS vector store from GCS directly into memory using PyCallbackIOReader.
-
-    Args:
-        gcs_prefix (str): The GCS prefix/folder where the FAISS index and docstore are stored.
-        embeddings (OpenAIEmbeddings): LangChain embeddings object.
-
-    Returns:
-        FAISS: LangChain FAISS vectorstore fully loaded in memory.
+    Handles docstore tuples or dict/InMemoryDocstore.
     """
     print(f"\n[DEBUG][GCS-LOAD] ======== Starting load_vectorstore_from_gcs_in_memory ========")
     print(f"[DEBUG][GCS-LOAD] Prefix: {gcs_prefix}")
 
     try:
-        # Ensure GCS client and bucket are initialized
-        if "gcs_client" not in globals() or "gcs_bucket_name" not in globals():
-            raise RuntimeError("GCS client or bucket name not initialized in globals()")
+        if not gcs_client or not gcs_bucket_name:
+            raise RuntimeError("GCS client or bucket name not initialized")
 
-        # List blobs under prefix
         bucket = gcs_client.bucket(gcs_bucket_name)
         blobs = list(bucket.list_blobs(prefix=gcs_prefix))
         if not blobs:
-            raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'.")
-
+            raise ValueError(f"No vector store files found in GCS for prefix '{gcs_prefix}'")
         print(f"[DEBUG][GCS-LOAD] Found {len(blobs)} blobs in GCS prefix.")
 
-        # Find index and docstore files
         index_bytes = None
         docstore_bytes = None
         for blob in blobs:
@@ -2029,34 +2019,43 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
                 print(f"[DEBUG][GCS-LOAD] Found docstore file: {blob.name}")
 
         if not index_bytes or not docstore_bytes:
-            raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'.")
+            raise RuntimeError(f"Missing FAISS index or docstore for prefix '{gcs_prefix}'")
 
-        # --- Load FAISS index fully in-memory using PyCallbackIOReader ---
+        # Load FAISS index
         bio = io.BytesIO(index_bytes)
         reader = faiss.PyCallbackIOReader(bio.read)
         index = faiss.read_index(reader)
         print("[DEBUG][GCS-LOAD] FAISS index loaded into memory.")
 
-        # --- Load docstore from bytes ---
-        docstore = pickle.loads(docstore_bytes)
-        print("[DEBUG][GCS-LOAD] Docstore loaded into memory.")
+        # Load docstore from pickle
+        raw_docstore = pickle.loads(docstore_bytes)
+        print(f"[DEBUG][GCS-LOAD] Raw docstore type: {type(raw_docstore)}")
 
-        # --- Build index_to_docstore_id mapping ---
-        if hasattr(docstore, "_dict"):
-            index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore._dict.keys())}
-        elif isinstance(docstore, dict):
-            index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore.keys())}
+        # Handle tuple (docstore, index_to_docstore_id) or dict/InMemoryDocstore
+        if isinstance(raw_docstore, tuple) and len(raw_docstore) == 2:
+            docstore, index_to_docstore_id = raw_docstore
+            print("[DEBUG][GCS-LOAD] Unpacked tuple docstore and index_to_docstore_id")
         else:
-            raise RuntimeError(f"Unsupported docstore type: {type(docstore)}")
-        print(f"[DEBUG][GCS-LOAD] index_to_docstore_id mapping created with {len(index_to_docstore_id)} items.")
+            docstore = raw_docstore
+            if hasattr(docstore, "_dict"):
+                index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore._dict.keys())}
+            elif isinstance(docstore, dict):
+                index_to_docstore_id = {i: doc_id for i, doc_id in enumerate(docstore.keys())}
+            else:
+                raise RuntimeError(f"Unsupported docstore type: {type(docstore)}")
+            print(f"[DEBUG][GCS-LOAD] index_to_docstore_id mapping created with {len(index_to_docstore_id)} items.")
 
-        # --- Construct LangChain FAISS object ---
+        # Build inverse mapping
+        index_to_docstore_id_inverse = {v: k for k, v in index_to_docstore_id.items()}
+
+        # Construct LangChain FAISS
         vs = FAISS(
             embedding_function=embeddings,
             index=index,
             docstore=docstore,
             index_to_docstore_id=index_to_docstore_id
         )
+        vs.index_to_docstore_id_inverse = index_to_docstore_id_inverse
 
         print(f"[DEBUG][GCS-LOAD] Successfully loaded FAISS store in memory.")
         print(f"[DEBUG][GCS-LOAD] ======== Finished load_vectorstore_from_gcs_in_memory ========\n")
@@ -2068,26 +2067,23 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         traceback.print_exc()
         raise
 
+# ---------- Bulk upload embeddings endpoint ----------
 @app.post("/admin/upload_embeddings_to_db")
 def upload_embeddings_to_db(db: Session = Depends(get_db)):
     """
     Loads FAISS vector stores for all PDFs from GCS and inserts embeddings
-    into the DB, avoiding duplicates. Compatible with in-memory FAISS loader.
+    into the DB, avoiding duplicates.
     """
     print("\n[DEBUG] Starting /admin/upload_embeddings_to_db endpoint")
-
     total_uploaded = 0
     total_skipped = 0
 
     try:
-        # -------------------------
         # Step 0: Fetch PDFs
-        # -------------------------
         print("[DEBUG] Fetching PDF list from Google Drive...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
         if not all_pdfs:
             raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
-
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
 
         embeddings_model = OpenAIEmbeddings(
@@ -2095,9 +2091,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             openai_api_key=os.environ.get("OPENAI_API_KEY_S")
         )
 
-        # -------------------------
         # Step 1: Process vector stores
-        # -------------------------
         for pdf_idx, pdf in enumerate(all_pdfs, start=1):
             pdf_name = pdf.get("name")
             pdf_path = pdf.get("path")
@@ -2114,24 +2108,25 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
                 print(f"[WARNING] Could not load vector store for PDF {pdf_name}: {e}")
                 continue
 
-            # -------------------------
             # Step 2: Iterate over docstore items
-            # -------------------------
-            if hasattr(vs.docstore, "_dict"):  # InMemoryDocstore
+            if hasattr(vs.docstore, "_dict"):
                 docstore_items = vs.docstore._dict.items()
             elif isinstance(vs.docstore, dict):
                 docstore_items = vs.docstore.items()
             else:
                 raise RuntimeError(f"Unsupported docstore type: {type(vs.docstore)}")
 
+            uploaded_this_pdf = 0
             for doc_id, doc in docstore_items:
                 try:
-                    # Map docstore ID to FAISS numeric internal ID
                     internal_id = vs.index_to_docstore_id_inverse[doc_id]
                     embedding_vector = vs.index.reconstruct(internal_id).tolist()
                 except Exception as e:
                     print(f"[WARNING] Could not reconstruct embedding for doc_id {doc_id}: {e}")
                     continue
+
+                # Safe metadata extraction
+                class_name = getattr(getattr(doc, "metadata", {}), "get", lambda k, d=None: d)("class_name", None)
 
                 # Skip duplicates
                 existing = db.query(Embedding).filter_by(
@@ -2144,16 +2139,19 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
 
                 new_embedding = Embedding(
                     pdf_name=pdf_name,
-                    class_name=doc.metadata.get("class_name") if doc.metadata else None,
+                    class_name=class_name,
                     chunk_id=doc_id,
                     embedding_vector=json.dumps(embedding_vector)
                 )
                 db.add(new_embedding)
                 total_uploaded += 1
+                uploaded_this_pdf += 1
 
-            # Commit per PDF (optional: could batch for multiple PDFs)
+                if uploaded_this_pdf % 50 == 0:
+                    print(f"[DEBUG] Uploaded {uploaded_this_pdf} embeddings for PDF '{pdf_name}' so far...")
+
             db.commit()
-            print(f"[DEBUG] Uploaded {total_uploaded} new embeddings so far. Skipped {total_skipped} duplicates.")
+            print(f"[DEBUG] PDF '{pdf_name}': Uploaded {uploaded_this_pdf} embeddings. Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
 
         print(f"\n[DEBUG] Completed upload. Total uploaded: {total_uploaded}, Total skipped: {total_skipped}")
         return {
