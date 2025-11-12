@@ -2219,12 +2219,14 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             uploaded_this_pdf = 0
             for doc_id, doc in docstore_items:
                 # Extract metadata and chunk content
+                # Extract metadata and chunk content, sanitize null characters
                 metadata = getattr(doc, "metadata", {}) or {}
-                chunk_text = metadata.get("chunk_text") or getattr(doc, "page_content", None) or ""
-                class_name = metadata.get("class_name")
-                pdf_link = metadata.get("pdf_link")  # optional
+                chunk_text = (metadata.get("chunk_text") or getattr(doc, "page_content", "") or "").replace("\x00", "")
+                class_name = (metadata.get("class_name") or "").replace("\x00", "")
+                pdf_link = (metadata.get("pdf_link") or "").replace("\x00", "")
                 page_number = metadata.get("page_number", 0)
                 chunk_index = metadata.get("chunk_index", 0)
+
 
                 try:
                     # Reconstruct embedding as a numeric list
