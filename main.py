@@ -1726,7 +1726,7 @@ async def search_pdfs(
         pdf_listing_done = True
 
     # Normalize class names
-    class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
+    
 
     def normalize_path(path: str) -> str:
         path = path.lower().strip()
@@ -1734,13 +1734,14 @@ async def search_pdfs(
         path = path.replace(".pdf.pdf", ".pdf")
         path = path.replace("- ", "-")
         return path
+    class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
 
-    # Filter PDFs by class_name
     pdf_files = []
     for pdf in all_pdfs:
-        pdf_path_norm = normalize_path(pdf.get("path", ""))
-        if any(cn in pdf_path_norm for cn in class_names_list):
+        pdf_class = pdf.get("class_name", "").lower()  # ✅ use metadata instead of path
+        if pdf_class in class_names_list:
             pdf_files.append(pdf)
+
 
     context_gist = get_context_gist(user_id)
     is_first_query = len(user_contexts[user_id]) == 0
