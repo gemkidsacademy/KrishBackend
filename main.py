@@ -1734,12 +1734,13 @@ async def search_pdfs(
         path = path.replace(".pdf.pdf", ".pdf")
         path = path.replace("- ", "-")
         return path
+     
     class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
 
     pdf_files = []
     for pdf in all_pdfs:
-        pdf_class = pdf.get("class_name", "").lower()  # ✅ use metadata instead of path
-        if pdf_class in class_names_list:
+        pdf_classes = [c.strip().lower() for c in pdf.get("class_name", "").split(",")]  # split PDF classes
+        if any(c in class_names_list for c in pdf_classes):
             pdf_files.append(pdf)
 
 
