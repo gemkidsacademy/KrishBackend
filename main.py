@@ -1739,7 +1739,14 @@ async def search_pdfs(
 
     pdf_files = []
     for pdf in all_pdfs:
-        pdf_classes = [c.strip().lower() for c in pdf.get("class_name", "").split(",")]  # split PDF classes
+        # Check metadata first
+        pdf_classes = [c.strip().lower() for c in pdf.get("class_name", "").split(",") if c]
+        
+        # If no metadata, fallback to path
+        if not pdf_classes:
+            pdf_path_norm = normalize_path(pdf.get("path", ""))
+            pdf_classes = pdf_path_norm.split("/")  # split by folders in path
+        
         if any(c in class_names_list for c in pdf_classes):
             pdf_files.append(pdf)
 
