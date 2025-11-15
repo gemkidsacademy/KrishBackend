@@ -1611,20 +1611,22 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
     if any(word in query.lower() for word in ["year", "term"]):
         return True
 
-    relevant_words = {
-        "subjects": ["math", "english", "science", "history", "geography"],
-        "lesson_keywords": ["exercise", "assignment", "quiz", "homework", "practice", "elaborate"]
-    }
-    # -------------------- Prepare prompt --------------------
-    prompt = (
-        "You are a helpful assistant that classifies queries as educational or not.\n\n"
-        "Determine if the following query is educational, i.e., related to school subjects, "
-        "lessons, exercises, assignments, quizzes, homework, or academic content. "
-        "If the query contains words in the following list, treat it as educational: "
-        f"{relevant_words['subjects'] + relevant_words['lesson_keywords']}. "
-        "Respond ONLY with Yes or No.\n\n"
-        f"Query: \"{query}\""
-    )
+    # Quick check for other educational keywords
+   educational_keywords = [
+       "math", "english", "science", "history", "geography",
+       "exercise", "assignment", "quiz", "homework", "practice", "elaborate", "academy"
+   ]
+   if any(word in query.lower() for word in educational_keywords):
+       return True
+   
+   # Prepare prompt for OpenAI classification
+   prompt = (
+       "You are a helpful assistant that classifies queries as educational or not.\n\n"
+       "Determine if the following query is educational, i.e., related to school subjects, "
+       "lessons, exercises, assignments, quizzes, homework, or academic content. "
+       "Respond ONLY with Yes or No.\n\n"
+       f"Query: \"{query}\""
+   )
 
     # -------------------- Call OpenAI --------------------
     response = openai_client.chat.completions.create(
