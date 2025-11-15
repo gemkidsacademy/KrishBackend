@@ -1695,10 +1695,26 @@ def search_top_k(query_text: str, top_k: int = 5, class_filter: list = None):
 
     return results
 
+def normalize_pdf_name(name: str) -> str:
+    """
+    Normalize PDF names/paths for robust matching:
+    - Lowercase
+    - Strip extra spaces
+    - Replace double extensions or double dots
+    - Replace hyphens consistently
+    """
+    name = name.lower().strip()
+    name = name.replace(".pdf.pdf", ".pdf")
+    name = name.replace("..", ".")
+    name = name.replace("- ", "-")
+    name = name.replace("  ", " ")
+    return name
+
+
 def matches_class(name_or_path: str, class_names: list[str]) -> bool:
-    """Return True if any class_name is substring of name_or_path (case-insensitive)"""
-    norm_str = name_or_path.lower().replace(".pdf.pdf", ".pdf").replace("- ", "-").strip()
-    return any(cls.lower().strip() in norm_str for cls in class_names)
+    """Return True if any class_name is substring of normalized name_or_path (case-insensitive)"""
+    norm_str = normalize_pdf_name(name_or_path)
+    return any(normalize_pdf_name(cls) in norm_str for cls in class_names)
 
 @app.get("/search")
 async def search_pdfs(
@@ -1847,7 +1863,8 @@ async def search_pdfs(
         
             # Optional: Filter by class_name if provided
             if class_list:
-                top_chunks = [c for c in top_chunks if matches_class(c.get("pdf_name",""), class_list)]        
+                top_chunks = [c for c in top_chunks if matches_class(normalize_pdf_name(c.get("pdf_name","")), class_list)]
+        
             # Sort by score descending
             top_chunks = sorted(top_chunks, key=lambda x: x['score'], reverse=True)[:TOP_K]
         else:
@@ -2119,6 +2136,10 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
         traceback.print_exc()
         raise
 
+def normalize_pdf_name(name: str) -> str:
+    return name.lower().replace(".pdf.pdf", ".pdf").replace("- ", "-").strip()
+
+
 @app.post("/admin/initialize_faiss")
 def initialize_faiss(db: Session = Depends(get_db)):
     """
@@ -2137,7 +2158,7 @@ def initialize_faiss(db: Session = Depends(get_db)):
         # Extract metadata for each embedding
         FAISS_METADATA = [
             {
-                "pdf_name": e.pdf_name,
+                "pdf_name": normalize_pdf_name(e.pdf_name),  # normalize here
                 "class_name": e.class_name,
                 "page_number": e.page_number,
                 "chunk_index": e.chunk_index,
@@ -2146,6 +2167,7 @@ def initialize_faiss(db: Session = Depends(get_db)):
             }
             for e in all_embeddings
         ]
+
 
         # Build FAISS index
         d = vectors.shape[1]  # embedding dimension
