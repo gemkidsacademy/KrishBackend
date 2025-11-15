@@ -1694,7 +1694,11 @@ def search_top_k(query_text: str, top_k: int = 5, class_filter: list = None):
             break
 
     return results
-    
+
+def matches_class(name_or_path: str, class_names: list[str]) -> bool:
+    """Return True if any class_name is substring of name_or_path (case-insensitive)"""
+    norm_str = name_or_path.lower().replace(".pdf.pdf", ".pdf").replace("- ", "-").strip()
+    return any(cls.lower().strip() in norm_str for cls in class_names)
 
 @app.get("/search")
 async def search_pdfs(
@@ -1749,20 +1753,20 @@ async def search_pdfs(
         return path
      
     class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
-
+    #here
     pdf_files = []
     for pdf in all_pdfs:
-        pdf_path_norm = normalize_path(pdf.get("path", ""))
-    
+        pdf_path = pdf.get("path", "")
+        
         # If no class filter → accept ALL PDFs
         if not class_names_list:
             pdf_files.append(pdf)
             continue
     
-        # Flexible class matching using substring
-        if any(cls in pdf_path_norm for cls in class_names_list):
+        # Use robust class matching
+        if matches_class(pdf_path, class_names_list):
             pdf_files.append(pdf)
-
+        #here
 
     context_gist = get_context_gist(user_id)
     is_first_query = len(user_contexts[user_id]) == 0
@@ -1843,8 +1847,7 @@ async def search_pdfs(
         
             # Optional: Filter by class_name if provided
             if class_list:
-                top_chunks = [c for c in top_chunks if c.get("class_name") in class_list]
-        
+                top_chunks = [c for c in top_chunks if matches_class(c.get("pdf_name",""), class_list)]        
             # Sort by score descending
             top_chunks = sorted(top_chunks, key=lambda x: x['score'], reverse=True)[:TOP_K]
         else:
