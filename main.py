@@ -1739,15 +1739,15 @@ async def search_pdfs(
 
     pdf_files = []
     for pdf in all_pdfs:
-        # Check metadata first
-        pdf_classes = [c.strip().lower() for c in pdf.get("class_name", "").split(",") if c]
-        
-        # If no metadata, fallback to path
-        if not pdf_classes:
-            pdf_path_norm = normalize_path(pdf.get("path", ""))
-            pdf_classes = pdf_path_norm.split("/")  # split by folders in path
-        
-        if any(c in class_names_list for c in pdf_classes):
+        pdf_path_norm = normalize_path(pdf.get("path", ""))
+    
+        # If no class filter → accept ALL PDFs
+        if not class_names_list:
+            pdf_files.append(pdf)
+            continue
+    
+        # Flexible class matching using substring
+        if any(cls in pdf_path_norm for cls in class_names_list):
             pdf_files.append(pdf)
 
 
@@ -1776,10 +1776,14 @@ async def search_pdfs(
         for pdf in pdf_files:
             path_lower = pdf.get("path", "").lower()
             name_lower = pdf["name"].lower()
-            if query_year and f"year {query_year}" not in path_lower:
+            if query_year and not (
+                f"year {query_year}" in path_lower or
+                f"year_{query_year}" in path_lower or
+                f"y{query_year}" in name_lower
+            ):
                 continue
-            term_matches = re.findall(r"t\s*(\d+)", name_lower)
-            week_matches = re.findall(r"w\s*(\d+)", name_lower)
+            term_matches = re.findall(r"(?:term|t)\s*[_-]*\s*(\d+)", name_lower)
+            week_matches = re.findall(r"(?:week|w)\s*[_-]*\s*(\d+)", name_lower)
             if (query_term is None or query_term in term_matches) and (query_week is None or query_week in week_matches):
                 filtered_pdfs.append(pdf)
 
