@@ -1538,18 +1538,10 @@ def is_pdf_request(
     db: Session
 ) -> bool:
     """
-    Determine whether the user wants PDF links.
-    Returns True if the model answers 'YES' or if query matches a term/week pattern.
+    Ask OpenAI whether the user wants PDF links.
+    Returns True if the model answers 'YES', False otherwise.
     Logs API usage if db session is provided.
     """
-    query_lower = query.lower()
-
-    # -------------------- Pattern-based check --------------------
-    term_week_pattern = r"term\s*\d+\s*week\s*\d+"
-    if re.search(term_week_pattern, query_lower):
-        return True
-
-    # -------------------- OpenAI classifier --------------------
     prompt = (
         "You are a strict intent classifier.\n\n"
         "Determine whether the following user query is asking to fetch PDF files or PDF links.\n"
@@ -1577,7 +1569,7 @@ def is_pdf_request(
 
                 log_openai_usage(
                     db=db,
-                    user_id=user_id,
+                    user_id=user_id,  # log with the user_id
                     model_name="gpt-4o-mini",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
@@ -1594,6 +1586,7 @@ def is_pdf_request(
         print(f"[ERROR] is_pdf_request failed: {e}")
         # fallback: treat as not a PDF request
         return False
+
 
 
 
