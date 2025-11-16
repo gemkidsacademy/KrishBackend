@@ -916,20 +916,22 @@ def get_next_user_id(db: Session = Depends(get_db)):
     return next_id
 
 
-def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
+def give_drive_access(
+    file_id: str,
+    emails: str,
+    role: str = "reader",
+    db: Session = Depends(get_db)  # DB session injected automatically
+):
     """
     Grants Google Drive access to the folder(s) matching the user's class name(s) from the database.
 
-    :param file_id: Root Drive folder ID (used to list class folders)
+    :param file_id: Root Drive folder ID
     :param emails: Comma-separated string of user emails
     :param role: "reader" or "writer"
-    :param db: SQLAlchemy Session for fetching class_name
+    :param db: SQLAlchemy Session (injected automatically)
     """
-    if db is None:
-        raise ValueError("A database session must be provided via `db` argument.")
-
     print("==== Starting Drive access process ====")
-    
+
     # Split and clean the email list
     email_list = [email.strip() for email in emails.split(",") if email.strip()]
     if not email_list:
@@ -997,7 +999,6 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                 print(f"ERROR: Failed to give Drive access to {user.email} for folder '{cls}': {error}")
 
     print("==== Drive access process completed ====")
-
 
 
 
