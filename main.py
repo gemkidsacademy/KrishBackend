@@ -981,6 +981,7 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                 print(f"WARNING: No folder found for class '{cls}', skipping {user.email}")
                 continue
 
+            print(f"DEBUG: Attempting to share folder '{cls}' (ID: {folder_id_to_share}) with {user.email}")
             try:
                 drive_service.permissions().create(
                     fileId=folder_id_to_share,
@@ -992,9 +993,9 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                     fields="id",
                     sendNotificationEmail=True
                 ).execute()
-                print(f"Access granted to {user.email} for folder '{cls}'")
+                print(f"DEBUG: Drive API call succeeded for {user.email} on folder '{cls}'")
             except HttpError as error:
-                print(f"ERROR: Failed to give Drive access to {user.email} for folder '{cls}': {error}")
+                print(f"ERROR: Drive API call failed for {user.email} on folder '{cls}': {error}")
 
     print("==== Drive access process completed ====")
 
