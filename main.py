@@ -223,9 +223,6 @@ class UserListItem(BaseModel):
     class Config:
         orm_mode = True  # allows SQLAlchemy models to be converted to Pydantic models
 
-class KnowledgeBaseResponse(BaseModel):
-    knowledge_base: str | None
-    updated_at: datetime | None
         
 
 class UserResponse(BaseModel):
