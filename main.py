@@ -334,6 +334,8 @@ with Session(engine) as session:
     else:
         print("Admin user already exists.")
 
+with get_db() as db:
+    fix_missing_pdf_links(db)
 
 def get_db():
     """Yield a database session, ensuring it's closed after use."""
@@ -1294,7 +1296,44 @@ def create_vectorstore_for_pdf(pdf_file):
     except Exception as e:
         print(f"[ERROR] Failed to upload PDF {pdf_name} to GCS: {e}")
 
+def fix_missing_pdf_links(db: Session = Depends(get_db)):
+    """
+    Finds embeddings with missing pdf_link, fetches correct links from Google Drive,
+    and updates DB. Does not touch embeddings themselves.
+    """
+    try:
+        # -------------------- Step 1: Find embeddings with missing pdf_link --------------------
+        missing_links = db.query(Embedding).filter(
+            (Embedding.pdf_link == None) | (Embedding.pdf_link == "")
+        ).all()
+        print(f"[INFO] Found {len(missing_links)} embeddings with missing pdf_link")
+        if not missing_links:
+            return {"message": "No missing pdf_link found. All good!"}
 
+        # -------------------- Step 2: Fetch correct pdf_link from Google Drive --------------------
+        all_pdfs = list_pdfs(DEMO_FOLDER_ID)  # returns list of {name, path, webViewLink, ...}
+        pdf_link_map = {pdf["name"]: pdf.get("webViewLink", "") for pdf in all_pdfs}
+
+        # -------------------- Step 3: Update embeddings --------------------
+        updated_count = 0
+        for emb in missing_links:
+            correct_link = pdf_link_map.get(emb.pdf_name)
+            if correct_link:
+                emb.pdf_link = correct_link
+                updated_count += 1
+
+        db.commit()
+        print(f"[INFO] Updated {updated_count} embeddings with missing pdf_link")
+
+        return {
+            "message": f"Updated {updated_count} embeddings with correct pdf_link",
+            "total_missing_before": len(missing_links)
+        }
+
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] Failed to fix missing pdf_link: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fix missing pdf_link: {str(e)}")
 
 
 
