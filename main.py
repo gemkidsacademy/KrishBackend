@@ -2035,6 +2035,155 @@ Guidelines:
     return JSONResponse(results)
 
 
+@app.post("/api/users/bulk")
+async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    print("DEBUG: Bulk CSV upload request received")
+
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Invalid file type. CSV required.")
+
+    try:
+        # Read CSV file safely
+        df = pd.read_csv(
+            file.file,
+            sep=None,
+            engine="python",
+            dtype={"phone_number": str},
+            encoding="utf-8-sig"
+        )
+
+        if df.empty:
+            raise HTTPException(status_code=400, detail="CSV file is empty")
+
+        # Normalize column names
+        df.columns = df.columns.str.strip().str.lower()
+        print(f"DEBUG: Columns after normalization: {list(df.columns)}")
+
+        # Ensure required columns exist
+        required_columns = {"name", "email"}
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV file must contain columns: {required_columns}"
+            )
+
+        # --- Clean phone numbers ---
+        # --- Clean and normalize Australian phone numbers ---
+        def fix_phone_number(x):
+            if pd.isna(x):
+                return None
+            try:
+                phone = str(int(float(x)))  # Handle scientific notation like 4.12E+09
+            except:
+                phone = str(x).strip().lstrip("'")
+        
+            phone = phone.replace(" ", "").replace("-", "")
+        
+            # --- Normalize for Australian format ---
+            if phone.startswith("+"):
+                return phone  # already correct
+            elif phone.startswith("04"):
+                return f"+61{phone[1:]}"  # Convert 04... -> +61...
+            elif phone.startswith("4"):
+                return f"+61{phone}"  # Convert 4... -> +614...
+            elif phone.startswith("61"):
+                return f"+{phone}"  # Ensure leading +
+            else:
+                return phone  # fallback for unexpected formats
+        
+        if "phone_number" in df.columns:
+            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
+
+
+        if "phone_number" in df.columns:
+            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
+
+        # --- Fetch existing emails and phone numbers from DB ---
+        existing_users = db.query(User.email, User.phone_number).all()
+        existing_emails = {u.email for u in existing_users if u.email}
+        existing_phones = {u.phone_number for u in existing_users if u.phone_number}
+
+        print(f"DEBUG: Existing emails: {len(existing_emails)}, phones: {len(existing_phones)}")
+
+        users_to_add = []
+        skipped_users = []  # track skipped duplicates
+
+        for index, row in df.iterrows():
+            email = row.get("email", "").strip()
+            phone = row.get("phone_number")
+
+            # Skip duplicates
+            if email in existing_emails or (phone and phone in existing_phones):
+                skipped_users.append({
+                    "name": row.get("name"),
+                    "email": email,
+                    "phone_number": phone,
+                    "reason": "Duplicate email or phone number"
+                })
+                print(f"DEBUG: Skipped duplicate -> {email} / {phone}")
+                continue
+
+            try:
+                user_obj = User(
+                    name=row["name"].strip(),
+                    email=email,
+                    phone_number=phone,
+                    class_name=row.get("class_name"),
+                    password=row.get("password") or "placeholder",
+                )
+                users_to_add.append(user_obj)
+                print(f"DEBUG: Prepared new user {index}: {email}")
+            except Exception as e:
+                skipped_users.append({
+                    "name": row.get("name"),
+                    "email": email,
+                    "phone_number": phone,
+                    "reason": f"Error processing row: {e}"
+                })
+                print(f"ERROR: Failed to process row {index}: {e}")
+                continue
+
+        if not users_to_add and not skipped_users:
+            raise HTTPException(status_code=400, detail="No valid users found in CSV")
+
+        # --- Insert new users ---
+        if users_to_add:
+            db.add_all(users_to_add)
+            db.commit()
+            print(f"DEBUG: Inserted {len(users_to_add)} users into the database")
+
+        # --- Grant Google Drive access ---
+        for u in users_to_add:
+            try:
+                give_drive_access(DEMO_FOLDER_ID, u.email, role="reader")
+                print(f"DEBUG: Granted Drive access to {u.email}")
+            except Exception as e:
+                print(f"ERROR: Failed to give Drive access to {u.email}: {e}")
+
+        # --- Return detailed response ---
+        return {
+            "added_users": [
+                {
+                    "name": u.name,
+                    "email": u.email,
+                    "phone_number": u.phone_number,
+                    "class_name": u.class_name,
+                }
+                for u in users_to_add
+            ],
+            "skipped_users": skipped_users,
+            "summary": {
+                "added": len(users_to_add),
+                "skipped": len(skipped_users),
+                "total_rows": len(df),
+            }
+        }
+
+    except Exception as e:
+        print(f"EXCEPTION: Bulk upload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # Utility: hash password
