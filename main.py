@@ -180,8 +180,7 @@ all_pdfs = []
 
 class KnowledgeBaseResponse(BaseModel):
     knowledge_base: Optional[str] = None
-    updated_at: Optional[datetime] = None
-
+ 
 class OpenAIUsageLog(Base):
     __tablename__ = "openai_usage_log"
 
@@ -572,24 +571,16 @@ async def guest_chatbot(request: ChatRequestGuestChatbot, db: Session = Depends(
         
 
 
-@app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
-def update_knowledge_base(
-    data: KnowledgeBaseRequest,
-    db: Session = Depends(get_db)
-):
-    try:
-        kb = db.query(KnowledgeBase).first()
-        if not kb:
-            kb = KnowledgeBase(content=data.knowledge_base)
-            db.add(kb)
-        else:
-            kb.content = data.knowledge_base
-        db.commit()
-        db.refresh(kb)
-        return KnowledgeBaseResponse(knowledge_base=kb.content, updated_at=kb.updated_at)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update knowledge base: {e}")
+@app.get("/api/knowledge-base", response_model=KnowledgeBaseResponse)
+def get_knowledge_base(db: Session = Depends(get_db)):
+    kb_entry = db.query(KnowledgeBase).first()
+    if not kb_entry:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    
+    return KnowledgeBaseResponse(
+        knowledge_base=kb_entry.content  # only this
+    )
+ 
     
 # ----------------- GET endpoint -----------------
 # GET user by ID
