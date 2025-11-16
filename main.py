@@ -1755,12 +1755,12 @@ async def search_pdfs(
         }])
 
     # ------------------ Step 0b: Check educational query ------------------
-    if not is_educational_query_openai(query, user_id=user_id, db=db):
-        return JSONResponse([{
-            "name": "**Academy Answer**",
-            "snippet": "Your query does not seem to be educational or relevant.",
-            "links": []
-        }])
+    #if not is_educational_query_openai(query, user_id=user_id, db=db):
+     #   return JSONResponse([{
+      #      "name": "**Academy Answer**",
+       #     "snippet": "Your query does not seem to be educational or relevant.",
+        #    "links": []
+       # }])
 
     # ------------------ Step 1: Prepare PDF list ------------------
     if not pdf_listing_done:
