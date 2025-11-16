@@ -916,33 +916,90 @@ def get_next_user_id(db: Session = Depends(get_db)):
     return next_id
 
 
+def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
+    """
+    Grants Google Drive access to the folder(s) matching the user's class name(s) from the database.
 
-def give_drive_access(file_id: str, emails: str, role: str = "reader"):
-    """
-    Grants access to a Google Drive file/folder for a list of emails.
-    
-    :param file_id: ID of the Drive file/folder
-    :param emails: Comma-separated string of emails
+    :param file_id: Root Drive folder ID (used to list class folders)
+    :param emails: Comma-separated string of user emails
     :param role: "reader" or "writer"
+    :param db: SQLAlchemy Session for fetching class_name
     """
+    if db is None:
+        raise ValueError("A database session must be provided via `db` argument.")
+
+    print("==== Starting Drive access process ====")
+    
     # Split and clean the email list
     email_list = [email.strip() for email in emails.split(",") if email.strip()]
-    
-    for email in email_list:
-        try:
-            drive_service.permissions().create(
-                fileId=file_id,
-                body={
-                    "type": "user",
-                    "role": role,
-                    "emailAddress": email
-                },
-                fields="id",
-                sendNotificationEmail=True  # optional: sends email notification to user
-            ).execute()
-            print(f"Access granted to {email}")
-        except HttpError as error:
-            print(f"Failed to give access to {email}: {error}")
+    if not email_list:
+        print("No emails provided. Exiting.")
+        return
+
+    print(f"DEBUG: Emails to process: {email_list}")
+
+    # Fetch users from DB
+    users = db.query(User).filter(User.email.in_(email_list)).all()
+    if not users:
+        print("No matching users found in the database. Exiting.")
+        return
+
+    # Warn if any emails not found in DB
+    missing_emails = set(email_list) - {u.email for u in users}
+    if missing_emails:
+        print(f"WARNING: These emails were not found in DB: {missing_emails}")
+
+    # Fetch all folders under root DEMO_FOLDER_ID
+    try:
+        response = drive_service.files().list(
+            q=f"'{file_id}' in parents and mimeType='application/vnd.google-apps.folder'",
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
+        folders = response.get("files", [])
+        print(f"DEBUG: Found folders in Drive: {[f['name'] for f in folders]}")
+    except HttpError as e:
+        print(f"ERROR: Failed to fetch folders from Drive: {e}")
+        return
+
+    # Map folder names to IDs for faster lookup
+    folder_map = {folder["name"].strip().lower(): folder["id"] for folder in folders}
+
+    # Grant access to each user based on their class_name(s)
+    for user in users:
+        if not user.class_name:
+            print(f"Skipping {user.email}: no class_name in DB")
+            continue
+
+        # Handle multiple class names, e.g., "Year 1, Year 2"
+        user_classes = [cn.strip().lower() for cn in user.class_name.split(",") if cn.strip()]
+        print(f"DEBUG: Processing {user.email} with class(es): {user_classes}")
+
+        for cls in user_classes:
+            folder_id_to_share = folder_map.get(cls)
+            if not folder_id_to_share:
+                print(f"WARNING: No folder found for class '{cls}', skipping {user.email}")
+                continue
+
+            try:
+                drive_service.permissions().create(
+                    fileId=folder_id_to_share,
+                    body={
+                        "type": "user",
+                        "role": role,
+                        "emailAddress": user.email
+                    },
+                    fields="id",
+                    sendNotificationEmail=True
+                ).execute()
+                print(f"Access granted to {user.email} for folder '{cls}'")
+            except HttpError as error:
+                print(f"ERROR: Failed to give Drive access to {user.email} for folder '{cls}': {error}")
+
+    print("==== Drive access process completed ====")
+
+
+
 
 @app.get("/api/knowledge-base", response_model=KnowledgeBaseResponse)
 def get_knowledge_base(db: Session = Depends(get_db)):
