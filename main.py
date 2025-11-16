@@ -178,6 +178,10 @@ cached_vectorstores = TTLCache(maxsize=20, ttl=3600)
 pdf_listing_done = False
 all_pdfs = []
 
+class KnowledgeBaseResponse(BaseModel):
+    knowledge_base: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
 class OpenAIUsageLog(Base):
     __tablename__ = "openai_usage_log"
 
@@ -953,6 +957,18 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader"):
             print(f"Access granted to {email}")
         except HttpError as error:
             print(f"Failed to give access to {email}: {error}")
+
+@app.get("/api/knowledge-base", response_model=KnowledgeBaseResponse)
+def get_knowledge_base(db: Session = Depends(get_db)):
+    # Fetch the first knowledge base row
+    kb_entry = db.query(KnowledgeBase).first()
+    if not kb_entry:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    
+    return KnowledgeBaseResponse(
+        knowledge_base=kb_entry.knowledge_base
+    )
+
 
 @app.post("/add_user")
 def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
@@ -1775,7 +1791,7 @@ async def search_pdfs(
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
     global FAISS_INDEX, FAISS_METADATA
-    fix_missing_pdf_links(db)
+    
 
     results = []
     top_chunks = []
