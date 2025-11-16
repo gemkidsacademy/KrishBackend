@@ -88,6 +88,7 @@ client = Client(account_sid, auth_token)
 # Temporary in-memory OTP storage
 otp_store = {}
 user_vectorstores_initialized = {} 
+
 MODEL_COST = {
     "gpt-4o-mini": {"input": 0.0015, "output": 0.002},  # USD per 1k tokens
     "text-embedding-3-small": {"input": 0.0004, "output": 0},
@@ -334,8 +335,6 @@ with Session(engine) as session:
     else:
         print("Admin user already exists.")
 
-with get_db() as db:
-    fix_missing_pdf_links(db)
 
 def get_db():
     """Yield a database session, ensuring it's closed after use."""
@@ -1776,6 +1775,7 @@ async def search_pdfs(
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
     global FAISS_INDEX, FAISS_METADATA
+    fix_missing_pdf_links(db)
 
     results = []
     top_chunks = []
