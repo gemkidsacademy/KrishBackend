@@ -1933,10 +1933,25 @@ async def search_pdfs(
 
     # ------------------ Step 5: Prepare GPT prompt ------------------
     reasoning_instruction = {
-        "simple": "Use plain, beginner-friendly language. Keep sentences short and avoid jargon.",
-        "medium": "Give a balanced explanation — clear, moderately detailed, and easy to follow.",
-        "advanced": "Provide a detailed, analytical, and example-rich explanation that shows expert understanding."
-    }.get(reasoning, "Use plain, beginner-friendly language.")
+        "simple": (
+            "Use plain, beginner-friendly language. Keep sentences short and avoid jargon. "
+            "Provide only the final answer. Do NOT include step-by-step explanations, formulas, or LaTeX. "
+            "If there is a number, include it with units, e.g., '112.5 ml'."
+        ),
+        "medium": (
+            "Give a balanced explanation — clear, moderately detailed, and easy to follow. "
+            "Provide only the final answer or main result. Avoid unnecessary formulas or LaTeX. "
+            "Include numbers with units when applicable."
+        ),
+        "advanced": (
+            "Provide a detailed, analytical, and example-rich explanation. "
+            "Include the final answer clearly at the start. Minimize LaTeX or raw formulas. "
+            "Numbers should be accompanied by units, e.g., '112.5 ml'."
+        )
+    }.get(reasoning, 
+          "Use plain, beginner-friendly language. Provide only the final answer in plain text, without step-by-step explanation or LaTeX, include units if applicable."
+    )
+
 
     if use_context_only or not top_chunks:
         gpt_prompt = f"""
