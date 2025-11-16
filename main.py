@@ -273,8 +273,6 @@ class KnowledgeBase(Base):
     content = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-class KnowledgeBaseUpdate(BaseModel):
-    knowledge_base: str
 
 class User(Base):
     __tablename__ = "users"
@@ -960,15 +958,13 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader"):
 
 @app.get("/api/knowledge-base", response_model=KnowledgeBaseResponse)
 def get_knowledge_base(db: Session = Depends(get_db)):
-    # Fetch the first knowledge base row
     kb_entry = db.query(KnowledgeBase).first()
     if not kb_entry:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
     
     return KnowledgeBaseResponse(
-        knowledge_base=kb_entry.knowledge_base
+        knowledge_base=kb_entry.content  # <-- use 'content', not 'knowledge_base'
     )
-
 
 @app.post("/add_user")
 def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
