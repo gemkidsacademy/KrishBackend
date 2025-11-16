@@ -916,20 +916,18 @@ def get_next_user_id(db: Session = Depends(get_db)):
     return next_id
 
 
-def give_drive_access(
-    file_id: str,
-    emails: str,
-    role: str = "reader",
-    db: Session = Depends(get_db)  # DB session injected automatically
-):
+def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
     """
     Grants Google Drive access to the folder(s) matching the user's class name(s) from the database.
 
-    :param file_id: Root Drive folder ID
+    :param file_id: Root Drive folder ID (DEMO_FOLDER_ID)
     :param emails: Comma-separated string of user emails
     :param role: "reader" or "writer"
-    :param db: SQLAlchemy Session (injected automatically)
+    :param db: SQLAlchemy Session (must be provided)
     """
+    if db is None:
+        raise ValueError("A database session must be provided via `db` argument.")
+
     print("==== Starting Drive access process ====")
 
     # Split and clean the email list
@@ -1002,6 +1000,7 @@ def give_drive_access(
 
 
 
+
 @app.get("/api/knowledge-base", response_model=KnowledgeBaseResponse)
 def get_knowledge_base(db: Session = Depends(get_db)):
     kb_entry = db.query(KnowledgeBase).first()
@@ -1040,7 +1039,10 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
 
     # ---------- Grant Google Drive Access ----------
     
-    give_drive_access(DEMO_FOLDER_ID, user_request.email, role="reader")
+    give_drive_access(DEMO_FOLDER_ID, user_request.email, role="reader", db=db)
+
+   
+
 
     return {"message": f"User '{new_user.name}' added successfully and Drive access granted!"}
 
@@ -2214,7 +2216,8 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         # --- Grant Google Drive access ---
         for u in users_to_add:
             try:
-                give_drive_access(DEMO_FOLDER_ID, u.email, role="reader")
+                give_drive_access(DEMO_FOLDER_ID, u.email, role="reader", db=db)
+
                 print(f"DEBUG: Granted Drive access to {u.email}")
             except Exception as e:
                 print(f"ERROR: Failed to give Drive access to {u.email}: {e}")
