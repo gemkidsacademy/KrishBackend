@@ -712,7 +712,7 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
 
 def send_otp_email(to_email: str, otp: str):
     message = Mail(
-        from_email='no-reply@gemkidsacademy.com.au',
+        from_email='noreply@gemkidsacademy.com.au',
         to_emails=to_email,
         subject='Your OTP Code',
         html_content=f'<p>Your OTP code is <strong>{otp}</strong>. It will expire in 5 minutes.</p>'
