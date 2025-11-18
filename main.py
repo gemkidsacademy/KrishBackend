@@ -269,6 +269,12 @@ class KnowledgeBase(Base):
     content = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class RelevantWords(Base):
+    __tablename__ = "relevant_words"
+
+    # A single always-true primary key row
+    singleton = Column(JSON, primary_key=True)
+
 
 class User(Base):
     __tablename__ = "users"
@@ -1703,27 +1709,45 @@ def generate_drive_pdf_url(file_id: str) -> str:
 
 def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
     """
-    Returns True if OpenAI classifies the query as educational, False otherwise.
-    Logs OpenAI API usage to the database.
+    Returns True if the query is educational based on:
+    - Local keywords loaded from DB (singleton list)
+    - OpenAI classification (with keyword list included in prompt)
+
+    Logs OpenAI usage.
     """
-    # -------------------- Quick check for 'year' or 'term' --------------------
-    if any(word in query.lower() for word in ["year", "term"]):
+
+    query_lower = query.lower()
+
+    # -------------------- Load keywords from DB --------------------
+    record = db.query(RelevantWords).first()
+    educational_keywords = record.singleton if record and isinstance(record.singleton, list) else []
+
+    # Normalize keywords
+    educational_keywords = [w.lower() for w in educational_keywords]
+
+    # -------------------- Quick local checks --------------------
+    if any(word in query_lower for word in ["year", "term"]):
         return True
-    
-    # Quick check for other educational keywords
-    educational_keywords = [
-        "math", "english", "science", "history", "geography",
-        "exercise", "assignment", "quiz", "homework", "practice", "elaborate", "academy"
-    ]
-    if any(word in query.lower() for word in educational_keywords):
+
+    if any(word in query_lower for word in educational_keywords):
         return True
-    
-    # Prepare prompt for OpenAI classification
+
+    # -------------------- Prepare OpenAI prompt --------------------
+    keywords_str = ", ".join(educational_keywords)
+
     prompt = (
-        "You are a helpful assistant that classifies queries as educational or not.\n\n"
-        "Determine if the following query is educational, i.e., related to school subjects, "
-        "lessons, exercises, assignments, quizzes, homework, or academic content. "
-        "Respond ONLY with Yes or No.\n\n"
+        "You are an assistant that classifies queries as educational or not.\n"
+        "A query is considered educational if it relates to:\n"
+        "- School subjects\n"
+        "- Lessons or concepts\n"
+        "- Homework or assignments\n"
+        "- Quizzes, tests, or academic exercises\n"
+        "- General learning or studying topics\n\n"
+
+        f"Use these user-defined educational keywords as guidance:\n"
+        f"{keywords_str}\n\n"
+
+        "Respond ONLY with 'Yes' or 'No'.\n\n"
         f"Query: \"{query}\""
     )
 
@@ -1743,16 +1767,15 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
         prompt_tokens = getattr(usage, "prompt_tokens", 0)
         completion_tokens = getattr(usage, "completion_tokens", 0)
 
-        # Calculate API cost
         call_cost = calculate_openai_cost(
             model_name="gpt-4o-mini",
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             multiplier=1.0
         )
+
         print(f"[INFO] OpenAI API cost for this call: ${call_cost}")
 
-        # Save usage in DB for the user
         log_openai_usage(
             db=db,
             user_id=user_id,
@@ -1761,6 +1784,7 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
             completion_tokens=completion_tokens,
             cost_usd=call_cost
         )
+
         print(f"[INFO] API usage logged in database for user_id={user_id}")
 
     return is_educational
@@ -1854,13 +1878,13 @@ async def search_pdfs(
             "links": []
         }])
 
-    # ------------------ Step 0b: Check educational query ------------------
-    #if not is_educational_query_openai(query, user_id=user_id, db=db):
-     #   return JSONResponse([{
-      #      "name": "**Academy Answer**",
-       #     "snippet": "Your query does not seem to be educational or relevant.",
-        #    "links": []
-       # }])
+    #------------------ Step 0b: Check educational query ------------------
+    if not is_educational_query_openai(query, user_id=user_id, db=db):
+        return JSONResponse([{
+            "name": "**Academy Answer**",
+            "snippet": "Your query does not seem to be educational or relevant.",
+            "links": []
+        }])
 
     # ------------------ Step 1: Prepare PDF list ------------------
     if not pdf_listing_done:
