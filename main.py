@@ -758,8 +758,8 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
 
     return {"message": "OTP sent successfully"}
 
-
-
+"""
+# not consistent with the new otp via email
 @app.post("/verify-otp")
 def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
     try:
@@ -830,6 +830,76 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
     except Exception as e:
         # Catch-all for unexpected errors
         print(f"[ERROR] Unexpected exception during OTP verification for {data.phone_number}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error during OTP verification")
+"""
+#consistent with the new otp via email
+@app.post("/verify-otp")
+def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
+    try:
+        print(f"[DEBUG] Received OTP verification request for email: {data.email}")
+
+        # --- Retrieve OTP record ---
+        record = otp_store.get(data.email)
+        if not record:
+            print(f"[WARNING] No OTP record found for {data.email}")
+            raise HTTPException(status_code=400, detail="OTP not sent")
+
+        if time.time() > record["expiry"]:
+            print(f"[WARNING] OTP for {data.email} has expired")
+            raise HTTPException(status_code=400, detail="OTP expired")
+
+        if str(data.otp) != str(record["otp"]):
+            print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP ({record['otp']})")
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+
+        print(f"[INFO] OTP for {data.email} is valid")
+
+        # --- Fetch user by email ---
+        user = db.query(User).filter(User.email == data.email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # --- Clear previous user state ---
+        if user.name in user_contexts:
+            user_contexts[user.name] = []
+            print(f"[DEBUG] Cleared previous context for user {user.name}")
+
+        # Reset per-user vectorstore flag
+        user_vectorstores_initialized[user.name] = False
+        print(f"[DEBUG] vectorstores_initialized for user {user.name} set to False")
+
+        # Clear any previous OTPs for this user
+        if data.email in otp_store:
+            del otp_store[data.email]
+            print(f"[DEBUG] Cleared previous OTP for {data.email}")
+
+        # Optionally: remove existing session to ensure fresh login
+        existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
+        if existing_session:
+            db.delete(existing_session)
+            db.commit()
+            print(f"[DEBUG] Cleared existing session for user {user.id}")
+
+        # --- Clear OTP after successful verification ---
+        otp_store.pop(data.email, None)
+        print(f"[DEBUG] Cleared OTP for {data.email} after successful verification")
+
+        # --- Prepare response ---
+        user_info = {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "class_name": user.class_name,
+        }
+
+        print(f"[INFO] OTP verification complete for user {user.name}")
+        return {"message": "OTP verified successfully", "user": user_info}
+
+    except HTTPException as e:
+        raise e
+
+    except Exception as e:
+        print(f"[ERROR] Unexpected exception during OTP verification for {data.email}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error during OTP verification")
 
 
