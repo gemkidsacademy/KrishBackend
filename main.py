@@ -271,9 +271,8 @@ class KnowledgeBase(Base):
 
 class RelevantWords(Base):
     __tablename__ = "relevant_words"
-
-    # A single always-true primary key row
-    singleton = Column(JSON, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    singleton = Column(JSON)
 
 
 class User(Base):
