@@ -7,7 +7,8 @@ from cachetools import TTLCache
 import re 
 from langchain_core.documents import Document
 import faiss
-
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 from pgvector.sqlalchemy import Vector
 
 
@@ -21,7 +22,7 @@ import numpy as np
 from twilio.rest import Client
 # FastAPI & Pydantic
 from fastapi import FastAPI, Response, Depends, HTTPException, Query, Path, Body, UploadFile, File
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
@@ -178,6 +179,9 @@ cached_vectorstores = TTLCache(maxsize=20, ttl=3600)
 pdf_listing_done = False
 all_pdfs = []
 
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
+
+
 class KnowledgeBaseResponse(BaseModel):
     knowledge_base: Optional[str] = None
  
@@ -236,8 +240,11 @@ class UsageResponse(BaseModel):
     amount_usd: float
     type: str
 
+#class SendOTPRequest(BaseModel):
+ #   phone_number: str
 class SendOTPRequest(BaseModel):
-    phone_number: str
+    email: EmailStr
+
 
 class VerifyOTPRequest(BaseModel):
     phone_number: str
@@ -669,7 +676,8 @@ def get_openai_usage(days: int = 30):
     except Exception as e:
         return [{"date": "N/A", "amount_usd": 0, "type": f"Error: {str(e)}"}]
         
-        
+"""   
+sending otp using twilio sms services
 @app.post("/send-otp")
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
@@ -700,7 +708,58 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error sending SMS: {e}")
 
     return {"message": "OTP sent successfully"}
+"""
+
+def send_otp_email(to_email: str, otp: str):
+    message = Mail(
+        from_email='no-reply@gemkidsacademy.com.au',
+        to_emails=to_email,
+        subject='Your OTP Code',
+        html_content=f'<p>Your OTP code is <strong>{otp}</strong>. It will expire in 5 minutes.</p>'
+    )
+    try:
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        print(f"[INFO] Email sent to {to_email}, status code {response.status_code}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send email to {to_email}: {e}")
+        raise
+
+#sending otp using send grid 
+@app.post("/send-otp")
+def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
+    print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
+
+    # --- Lookup user by phone number ---
+    user = db.query(User).filter(User.phone_number == data.phone_number).first()
+    if not user:
+        print(f"[WARNING] Phone number {data.phone_number} not found in database")
+        raise HTTPException(status_code=404, detail="Phone number not found")
     
+    email = user.email
+    print(f"[DEBUG] Found user {user.name} with email {email}")
+
+    # --- Generate OTP ---
+    otp = generate_otp()
+    print(f"[DEBUG] Generated OTP {otp} for email {email}")
+
+    # --- Store OTP keyed by email ---
+    otp_store[email] = {"otp": otp, "expiry": time.time() + 300}  # 5 min expiry
+    print(f"[DEBUG] Stored OTP for {email} with 5 min expiry")
+
+    # --- Send OTP via email ---
+    try:
+        print(f"[DEBUG] Attempting to send OTP to {email} via email")
+        send_otp_email(email, otp)
+        print(f"[INFO] Successfully sent OTP to {email}")
+    except Exception as e:
+        print(f"[ERROR] Error sending OTP to {email}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error sending email: {e}")
+
+    return {"message": "OTP sent successfully"}
+
+
+
 @app.post("/verify-otp")
 def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
     try:
