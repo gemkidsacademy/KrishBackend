@@ -2760,9 +2760,8 @@ def load_faiss_on_startup():
     """
     print("[STARTUP] Initializing FAISS index...")
 
-    # Create DB session manually
-    from database import SessionLocal
-    db: Session = SessionLocal()
+    # Use the SessionLocal already defined in your code
+    db = SessionLocal()
 
     try:
         initialize_faiss(db=db)
@@ -2771,6 +2770,7 @@ def load_faiss_on_startup():
         print(f"[STARTUP ERROR] Failed to initialize FAISS: {str(e)}")
     finally:
         db.close()
+
 
 
 
