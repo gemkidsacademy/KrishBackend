@@ -742,7 +742,8 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Generated OTP {otp} for email {email}")
 
     # --- Store OTP keyed by email ---
-    otp_store[email] = {"otp": otp, "expiry": time.time() + 300}  # 5 min expiry
+    otp_store[data.phone_number] = {"otp": otp, "expiry": time.time() + 300}
+    # 5 min expiry
     print(f"[DEBUG] Stored OTP for {email} with 5 min expiry")
 
     # --- Send OTP via email ---
