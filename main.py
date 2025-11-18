@@ -240,10 +240,8 @@ class UsageResponse(BaseModel):
     amount_usd: float
     type: str
 
-#class SendOTPRequest(BaseModel):
- #   phone_number: str
 class SendOTPRequest(BaseModel):
-    email: EmailStr
+    phone_number: str
 
 
 class VerifyOTPRequest(BaseModel):
