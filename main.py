@@ -1719,7 +1719,8 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
 
     # -------------------- Load keywords from DB --------------------
     record = db.query(RelevantWords).first()
-    educational_keywords = record.singleton if record and isinstance(record.singleton, list) else []
+    educational_keywords = record.singleton.get("educational_keywords", []) if record else []
+
 
     # Normalize keywords
     educational_keywords = [w.lower() for w in educational_keywords]
