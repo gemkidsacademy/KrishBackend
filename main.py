@@ -1978,6 +1978,26 @@ def matches_class(name_or_path: str, class_names: list[str]) -> bool:
     norm_str = normalize_pdf_name(name_or_path)
     return any(normalize_pdf_name(cls) in norm_str for cls in class_names)
 
+@app.post("/api/update-knowledge-base", response_model=KnowledgeBaseResponse)
+def update_knowledge_base(
+    data: KnowledgeBaseRequest,
+    db: Session = Depends(get_db)
+):
+    try:
+        kb = db.query(KnowledgeBase).first()
+        if not kb:
+            kb = KnowledgeBase(content=data.knowledge_base)
+            db.add(kb)
+        else:
+            kb.content = data.knowledge_base
+        db.commit()
+        db.refresh(kb)
+        return KnowledgeBaseResponse(knowledge_base=kb.content, updated_at=kb.updated_at)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update knowledge base: {e}")
+
+
 @app.get("/search")
 async def search_pdfs(
     query: str,
