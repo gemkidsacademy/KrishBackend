@@ -241,7 +241,7 @@ class UsageResponse(BaseModel):
     type: str
 
 class SendOTPRequest(BaseModel):
-    phone_number: str
+    email: str
 
 
 class VerifyOTPRequest(BaseModel):
@@ -726,24 +726,26 @@ def send_otp_email(to_email: str, otp: str):
 #sending otp using send grid 
 @app.post("/send-otp")
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
-    print(f"[DEBUG] Received OTP request for phone number: {data.phone_number}")
+    email = data.email.strip().lower()
+    print(f"[DEBUG] Received OTP request for email: {email}")
 
-    # --- Lookup user by phone number ---
-    user = db.query(User).filter(User.phone_number == data.phone_number).first()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    # --- Lookup user by email ---
+    user = db.query(User).filter(User.email == email).first()
     if not user:
-        print(f"[WARNING] Phone number {data.phone_number} not found in database")
-        raise HTTPException(status_code=404, detail="Phone number not found")
-    
-    email = user.email
+        print(f"[WARNING] Email {email} not found in database")
+        raise HTTPException(status_code=404, detail="Email not found")
+
     print(f"[DEBUG] Found user {user.name} with email {email}")
 
     # --- Generate OTP ---
     otp = generate_otp()
     print(f"[DEBUG] Generated OTP {otp} for email {email}")
 
-    # --- Store OTP keyed by email ---
-    otp_store[data.phone_number] = {"otp": otp, "expiry": time.time() + 300}
-    # 5 min expiry
+    # --- Store OTP keyed by email with 5 min expiry ---
+    otp_store[email] = {"otp": otp, "expiry": time.time() + 300}
     print(f"[DEBUG] Stored OTP for {email} with 5 min expiry")
 
     # --- Send OTP via email ---
