@@ -2777,23 +2777,6 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to upload embeddings: {str(e)}")
 
 
-@app.on_event("startup")
-def load_faiss_on_startup():
-    """
-    Automatically initializes FAISS from database when the API starts.
-    """
-    print("[STARTUP] Initializing FAISS index...")
-
-    # Use the SessionLocal already defined in your code
-    db = SessionLocal()
-
-    try:
-        initialize_faiss(db=db)
-        print("[STARTUP] FAISS initialization complete.")
-    except Exception as e:
-        print(f"[STARTUP ERROR] Failed to initialize FAISS: {str(e)}")
-    finally:
-        db.close()
 
 
 
