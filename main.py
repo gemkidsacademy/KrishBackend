@@ -245,7 +245,7 @@ class SendOTPRequest(BaseModel):
 
 
 class VerifyOTPRequest(BaseModel):
-    phone_number: str
+    email: str
     otp: str
 
 
@@ -834,70 +834,72 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal server error during OTP verification")
 """
 #consistent with the new otp via email
+from fastapi import HTTPException, Depends
+from sqlalchemy.orm import Session
+import time
+from pydantic import BaseModel
+
+# OTP store keyed by email
+otp_store = {}
+
+class VerifyOTPRequest(BaseModel):
+    email: str
+    otp: str
+
 @app.post("/verify-otp")
 def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
-    try:
-        phone = data.phone_number
-        print(f"[DEBUG] Received OTP verification request for phone number: {phone}")
+    email = data.email.strip().lower()
+    print(f"[DEBUG] Received OTP verification request for email: {email}")
 
-        # --- Fetch user ---
-        user = db.query(User).filter(User.phone_number == phone).first()
-        if not user:
-            print(f"[WARNING] User with phone {phone} not found")
-            raise HTTPException(status_code=404, detail="User not found")
+    # --- Fetch user by email ---
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        print(f"[WARNING] User with email {email} not found")
+        raise HTTPException(status_code=404, detail="User not found")
 
-        # --- Retrieve OTP record ---
-        record = otp_store.get(phone)
-        if not record:
-            print(f"[WARNING] No OTP record found for {phone}")
-            raise HTTPException(status_code=400, detail="OTP not sent")
+    # --- Retrieve OTP record ---
+    record = otp_store.get(email)
+    if not record:
+        print(f"[WARNING] No OTP record found for {email}")
+        raise HTTPException(status_code=400, detail="OTP not sent")
 
-        if time.time() > record["expiry"]:
-            print(f"[WARNING] OTP for {phone} has expired")
-            # Remove expired OTP
-            otp_store.pop(phone, None)
-            raise HTTPException(status_code=400, detail="OTP expired")
+    if time.time() > record["expiry"]:
+        print(f"[WARNING] OTP for {email} has expired")
+        otp_store.pop(email, None)
+        raise HTTPException(status_code=400, detail="OTP expired")
 
-        if str(data.otp) != str(record["otp"]):
-            print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP ({record['otp']})")
-            raise HTTPException(status_code=400, detail="Invalid OTP")
+    if str(data.otp) != str(record["otp"]):
+        print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP ({record['otp']})")
+        raise HTTPException(status_code=400, detail="Invalid OTP")
 
-        print(f"[INFO] OTP for {phone} is valid")
-        # Clear OTP after successful verification
-        otp_store.pop(phone, None)
+    print(f"[INFO] OTP for {email} is valid")
+    otp_store.pop(email, None)  # Clear OTP after verification
 
-        # --- Clear previous user state ---
-        if user.name in user_contexts:
-            user_contexts[user.name] = []
-            print(f"[DEBUG] Cleared previous context for user {user.name}")
+    # --- Clear previous user state if applicable ---
+    if user.name in user_contexts:
+        user_contexts[user.name] = []
+        print(f"[DEBUG] Cleared previous context for user {user.name}")
 
-        user_vectorstores_initialized[user.name] = False
-        print(f"[DEBUG] vectorstores_initialized for user {user.name} set to False")
+    user_vectorstores_initialized[user.name] = False
+    print(f"[DEBUG] vectorstores_initialized for user {user.name} set to False")
 
-        # Remove existing session (fresh login)
-        existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
-        if existing_session:
-            db.delete(existing_session)
-            db.commit()
-            print(f"[DEBUG] Cleared existing session for user {user.id}")
+    # Remove existing session if using session management
+    existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
+    if existing_session:
+        db.delete(existing_session)
+        db.commit()
+        print(f"[DEBUG] Cleared existing session for user {user.id}")
 
-        # --- Prepare response ---
-        user_info = {
-            "id": user.id,
-            "name": user.name,
-            "phone_number": user.phone_number,
-            "class_name": user.class_name,
-        }
+    # --- Prepare response including class_name ---
+    user_info = {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "class_name": user.class_name,
+    }
 
-        print(f"[INFO] OTP verification complete for user {user.name}")
-        return {"message": "OTP verified successfully", "user": user_info}
-
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        print(f"[ERROR] Unexpected exception during OTP verification for {data.phone_number}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error during OTP verification")
-
+    print(f"[INFO] OTP verification complete for user {user.name}")
+    return {"message": "OTP verified successfully", "user": user_info}
 
 
 
