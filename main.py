@@ -229,7 +229,13 @@ class UserListItem(BaseModel):
 
         
 
-UserResponse
+class UserResponse(BaseModel):
+    name: str
+    email: str
+    phone_number: Optional[str] = None
+    class_name: Optional[str] = None
+    class_day: Optional[str] = None  # <-- added
+ 
 
 class UsageResponse(BaseModel):
     date: str
