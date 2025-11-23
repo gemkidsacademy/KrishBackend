@@ -221,20 +221,16 @@ class UserListItem(BaseModel):
     id: int
     name: str
     email: str
-    phone_number: str
-    class_name: str
-
+    phone_number: Optional[str] = None
+    class_name: Optional[str] = None
+    class_day: Optional[str] = None  # <-- added
     class Config:
         orm_mode = True  # allows SQLAlchemy models to be converted to Pydantic models
 
         
 
-class UserResponse(BaseModel):
-    name: str
-    email: str
-    phone_number: str  # now required
-    class_name: str    # now required
-    
+UserResponse
+
 class UsageResponse(BaseModel):
     date: str
     amount_usd: float
@@ -605,8 +601,10 @@ def get_user(user_id: int = Path(..., description="ID of the user to retrieve"),
         name=user.name,
         email=user.email,
         phone_number=user.phone_number,
-        class_name=user.class_name
+        class_name=user.class_name,
+        class_day=user.class_day  # <-- added
     )
+              
 @app.get("/user_ids")
 def get_user_ids(db: Session = Depends(get_db)):
     """
