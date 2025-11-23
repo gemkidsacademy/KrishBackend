@@ -2289,7 +2289,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         print(f"DEBUG: Columns after normalization: {list(df.columns)}")
 
         # Ensure required columns exist
-        required_columns = {"name", "email"}
+        required_columns = {"name", "email", "class_name", "class_day", "password"}
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
             raise HTTPException(
@@ -2297,7 +2297,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                 detail=f"CSV file must contain columns: {required_columns}"
             )
 
-        # --- Clean phone numbers ---
         # --- Clean and normalize Australian phone numbers ---
         def fix_phone_number(x):
             if pd.isna(x):
@@ -2306,12 +2305,9 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                 phone = str(int(float(x)))  # Handle scientific notation like 4.12E+09
             except:
                 phone = str(x).strip().lstrip("'")
-        
             phone = phone.replace(" ", "").replace("-", "")
-        
-            # --- Normalize for Australian format ---
             if phone.startswith("+"):
-                return phone  # already correct
+                return phone
             elif phone.startswith("04"):
                 return f"+61{phone[1:]}"  # Convert 04... -> +61...
             elif phone.startswith("4"):
@@ -2319,11 +2315,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
             elif phone.startswith("61"):
                 return f"+{phone}"  # Ensure leading +
             else:
-                return phone  # fallback for unexpected formats
-        
-        if "phone_number" in df.columns:
-            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
-
+                return phone  # fallback
 
         if "phone_number" in df.columns:
             df["phone_number"] = df["phone_number"].apply(fix_phone_number)
@@ -2332,11 +2324,10 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         existing_users = db.query(User.email, User.phone_number).all()
         existing_emails = {u.email for u in existing_users if u.email}
         existing_phones = {u.phone_number for u in existing_users if u.phone_number}
-
         print(f"DEBUG: Existing emails: {len(existing_emails)}, phones: {len(existing_phones)}")
 
         users_to_add = []
-        skipped_users = []  # track skipped duplicates
+        skipped_users = []
 
         for index, row in df.iterrows():
             email = row.get("email", "").strip()
@@ -2359,6 +2350,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                     email=email,
                     phone_number=phone,
                     class_name=row.get("class_name"),
+                    class_day=row.get("class_day"),  # <-- added
                     password=row.get("password") or "placeholder",
                 )
                 users_to_add.append(user_obj)
@@ -2386,7 +2378,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
         for u in users_to_add:
             try:
                 give_drive_access(DEMO_FOLDER_ID, u.email, role="reader", db=db)
-
                 print(f"DEBUG: Granted Drive access to {u.email}")
             except Exception as e:
                 print(f"ERROR: Failed to give Drive access to {u.email}: {e}")
@@ -2399,6 +2390,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
                     "email": u.email,
                     "phone_number": u.phone_number,
                     "class_name": u.class_name,
+                    "class_day": u.class_day,
                 }
                 for u in users_to_add
             ],
@@ -2413,7 +2405,6 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 # Utility: hash password
