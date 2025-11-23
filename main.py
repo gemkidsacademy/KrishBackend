@@ -263,11 +263,12 @@ class KnowledgeBaseRequest(BaseModel):
 
 class EditUserRequest(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     phone_number: str
     class_name: str
+    class_day: str  # new field for class day
     password: Optional[str] = None  # only update if provided
-    
+ 
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_base"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -1198,6 +1199,7 @@ def edit_user(
     user.email = user_request.email
     user.phone_number = user_request.phone_number
     user.class_name = user_request.class_name
+    user.class_day = user_request.class_day  # <-- added
 
     # Only update password if provided
     if user_request.password:
@@ -1208,9 +1210,7 @@ def edit_user(
     db.commit()
     db.refresh(user)
 
-    return {"message": f"User '{user.name}' updated successfully!"}
-
-        
+    return {"message": f"User '{user.name}' updated successfully!"}        
 
 #----------------------functions
 
