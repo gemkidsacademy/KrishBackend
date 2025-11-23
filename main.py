@@ -251,13 +251,13 @@ class VerifyOTPRequest(BaseModel):
 
     
 class AddUserRequest(BaseModel):
-    id: int
     name: str
     email: str
-    password: str
     phone_number: str
-    class_name: str 
-
+    class_name: str
+    class_day: str  # <-- added
+    password: str
+ 
 class KnowledgeBaseRequest(BaseModel):
     knowledge_base: str
 
@@ -282,15 +282,14 @@ class RelevantWords(Base):
 
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False)
-    email = Column(String(100), unique=True, index=True, nullable=False)
-    phone_number = Column(String(20), nullable=True)  # optional
-    class_name = Column(String(50), nullable=True)    # optional
-    password = Column(String(255), nullable=False)    # hashed password
+    name = Column(String, nullable=False)
+    email = Column(String, unique=True, nullable=False)
+    phone_number = Column(String, nullable=False)
+    class_name = Column(String, nullable=False)
+    class_day = Column(String, nullable=False)  # <-- added
+    password = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-
     # Establish relationship with sessions
     sessions = relationship("SessionModel", back_populates="user", cascade="all, delete-orphan")
 
@@ -1145,7 +1144,7 @@ def get_knowledge_base(db: Session = Depends(get_db)):
     return KnowledgeBaseResponse(
         knowledge_base=kb_entry.content  # <-- use 'content', not 'knowledge_base'
     )
-
+#here
 @app.post("/add_user")
 def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     # Check if email already exists
@@ -1153,16 +1152,16 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash the password using Werkzeug (compatible with check_password_hash later)
+    # Hash the password using Werkzeug
     hashed_password = generate_password_hash(user_request.password)
 
-    # Create new user instance
+    # Create new user instance with class_day
     new_user = User(
-        
         name=user_request.name,
         email=user_request.email,
         phone_number=user_request.phone_number,
         class_name=user_request.class_name,
+        class_day=user_request.class_day,  # <-- new field
         password=hashed_password,
         created_at=datetime.utcnow()
     )
@@ -1173,11 +1172,7 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     db.refresh(new_user)
 
     # ---------- Grant Google Drive Access ----------
-    
     give_drive_access(DEMO_FOLDER_ID, user_request.email, role="reader", db=db)
-
-   
-
 
     return {"message": f"User '{new_user.name}' added successfully and Drive access granted!"}
 
