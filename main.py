@@ -426,8 +426,17 @@ async def root():
 @app.get("/api/users", response_model=List[UserListItem])
 def get_all_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
-    return users
-    
+    return [
+        UserListItem(
+            id=u.id,
+            name=u.name,
+            email=u.email,
+            phone_number=u.phone_number,
+            class_name=u.class_name,
+            class_day=u.class_day  # <-- explicitly include
+        )
+        for u in users
+    ]    
 @app.get("/api/openai-usage")
 def get_openai_usage(db: Session = Depends(get_db)):
     """
