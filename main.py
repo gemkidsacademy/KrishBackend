@@ -223,7 +223,14 @@ class GuestChatbotMessage(BaseModel):
 class ChatRequestGuestChatbot(BaseModel):
     query: str
     context: List[GuestChatbotMessage] = []
-    
+
+
+class FranchiseLocation(Base):
+    __tablename__ = "FranchiseLocation"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    country = Column(String(100), nullable=False)
+    state = Column(String(100), nullable=False)
+
 class UserListItem(BaseModel):
     id: int
     name: str
@@ -2361,8 +2368,16 @@ Guidelines:
 - Prepend "[GPT answer]" if relying on your own understanding.
 """
     else:
+        row = db.execute(select(FranchiseLocation)).scalar_one_or_none()
+        if row:
+           country = row.country
+           state = row.state
+           print(f"Country: {country}, State: {state}")
+        else:
+           print("No row found in FranchiseLocation table.")
+    
         gpt_prompt = f"""
-You are an assistant. Follow the instructions below carefully.
+You are an assistant for {class_name} in {country} {state} . Follow the instructions below carefully.
 
 Style: {reasoning_instruction}
 
