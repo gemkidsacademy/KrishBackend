@@ -333,12 +333,13 @@ with Session(engine) as session:
         
         # Create the admin user
         new_admin = User(
-            name=ADMIN_NAME,
-            email=ADMIN_EMAIL,
-            phone_number=ADMIN_PHONE,
-            class_name=ADMIN_CLASS,
-            password=hashed_password
-        )
+           name=ADMIN_NAME,
+           email=ADMIN_EMAIL,
+           phone_number=ADMIN_PHONE,
+           class_name=ADMIN_CLASS,
+           class_day="N/A",  # <-- add this
+           password=hashed_password
+       )
         session.add(new_admin)
         session.commit()
         print("Admin user created.")
