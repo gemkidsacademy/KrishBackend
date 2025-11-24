@@ -734,8 +734,10 @@ def send_otp_email(to_email: str, otp: str):
         to_emails=to_email,
         subject='Your OTP Code',
         html_content=f'<p>Your OTP code is <strong>{otp}</strong>. It will expire in 5 minutes.</p>',
-        reply_to='do-not-reply@gemkidsacademy.com.au'  # <--- prevents replies
+        
     )
+     # Set reply_to correctly
+    message.reply_to = Email('do-not-reply@gemkidsacademy.com.au')
     try:
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         response = sg.send(message)
