@@ -8,7 +8,8 @@ import re
 from langchain_core.documents import Document
 import faiss
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from sendgrid.helpers.mail import Mail, Email 
+
 from pgvector.sqlalchemy import Vector
 
 
