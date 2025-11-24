@@ -226,7 +226,7 @@ class ChatRequestGuestChatbot(BaseModel):
 
 
 class FranchiseLocation(Base):
-    __tablename__ = "FranchiseLocation"
+    __tablename__ = "franchiselocation"
     id = Column(Integer, primary_key=True, autoincrement=True)
     country = Column(String(100), nullable=False)
     state = Column(String(100), nullable=False)
