@@ -1138,7 +1138,7 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                         "emailAddress": user.email
                     },
                     fields="id",
-                    sendNotificationEmail=False
+                    sendNotificationEmail=True
                 ).execute()
                 print(f"DEBUG: Drive API call succeeded for {user.email} on folder '{cls}'")
             except HttpError as error:
