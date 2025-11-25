@@ -1080,16 +1080,16 @@ def get_next_user_id(db: Session = Depends(get_db)):
     next_id = (last_user.id + 1) if last_user else 1
     return next_id
 
-
+"""
 def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
-    """
-    Grants Google Drive access to the folder(s) matching the user's class name(s) from the database.
+    
+    #Grants Google Drive access to the folder(s) matching the user's class name(s) from the database.
 
-    :param file_id: Root Drive folder ID (DEMO_FOLDER_ID)
-    :param emails: Comma-separated string of user emails
-    :param role: "reader" or "writer"
-    :param db: SQLAlchemy Session (must be provided)
-    """
+    #:param file_id: Root Drive folder ID (DEMO_FOLDER_ID)
+    #:param emails: Comma-separated string of user emails
+    #:param role: "reader" or "writer"
+    #:param db: SQLAlchemy Session (must be provided)
+    
     if db is None:
         raise ValueError("A database session must be provided via `db` argument.")
 
@@ -1163,143 +1163,143 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                 print(f"ERROR: Drive API call failed for {user.email} on folder '{cls}': {error}")
 
     print("==== Drive access process completed ====")
+"""
+def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
+    """
+    Grants Google Drive access to a specific Year/Term folder:
+      Root Folder → Year Folder → Term Folder
 
-# def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
-#     """
-#     Grants Google Drive access to a specific Year/Term folder:
-#       Root Folder → Year Folder → Term Folder
-#
-#     :param file_id: Root Drive folder ID (e.g., GEM_AI_ROOT_FOLDER)
-#     :param emails: Comma-separated list of emails
-#     :param role: Drive permission role ('reader' or 'writer')
-#     :param db: SQLAlchemy Session
-#     """
-#
-#     if db is None:
-#         raise ValueError("A database session must be provided via `db` argument.")
-#
-#     print("==== Starting Drive access process ====")
-#
-#     # -------------------------
-#     # Split & sanitize emails
-#     # -------------------------
-#     email_list = [email.strip() for email in emails.split(",") if email.strip()]
-#     if not email_list:
-#         print("No emails provided. Exiting.")
-#         return
-#
-#     print(f"DEBUG: Emails to process: {email_list}")
-#
-#     # -------------------------
-#     # Fetch users
-#     # -------------------------
-#     users = db.query(User).filter(User.email.in_(email_list)).all()
-#     if not users:
-#         print("No matching users found in DB. Exiting.")
-#         return
-#
-#     missing = set(email_list) - {u.email for u in users}
-#     if missing:
-#         print(f"WARNING: Emails not found in DB: {missing}")
-#
-#     # -------------------------
-#     # Load current term from DB
-#     # -------------------------
-#     current_term_record = db.query(CurrentTerm).first()
-#     if not current_term_record:
-#         print("ERROR: No current term found in DB. Exiting.")
-#         return
-#
-#     current_term = current_term_record.term_name.strip().lower()
-#     print(f"DEBUG: Current term from DB: '{current_term}'")
-#
-#     # -------------------------
-#     # Helper to fetch subfolders
-#     # -------------------------
-#     def get_subfolders(parent_id: str):
-#         try:
-#             response = drive_service.files().list(
-#                 q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder'",
-#                 spaces="drive",
-#                 fields="files(id, name)"
-#             ).execute()
-#             return response.get("files", [])
-#         except HttpError as e:
-#             print(f"ERROR: Failed fetching subfolders for parent {parent_id}: {e}")
-#             return []
-#
-#     # -------------------------
-#     # 1. Fetch Year folders under root
-#     # -------------------------
-#     year_folders = get_subfolders(file_id)
-#     print(f"DEBUG: Found Year folders: {[f['name'] for f in year_folders]}")
-#
-#     # -------------------------
-#     # 2. Build Year → Term → folderId map
-#     # -------------------------
-#     folder_map = {}
-#
-#     for year in year_folders:
-#         year_name = year["name"].strip().lower()
-#         year_id = year["id"]
-#
-#         term_folders = get_subfolders(year_id)
-#
-#         folder_map[year_name] = {
-#             term["name"].strip().lower(): term["id"]
-#             for term in term_folders
-#         }
-#
-#     print("DEBUG: Folder map:", folder_map)
-#
-#     # -------------------------
-#     # 3. Grant access
-#     # -------------------------
-#     for user in users:
-#
-#         if not user.class_name:
-#             print(f"Skipping {user.email}: class_name is empty.")
-#             continue
-#
-#         # user may have multiple classes: "Year 1, Year 2"
-#         user_years = [c.strip().lower() for c in user.class_name.split(",")]
-#
-#         print(f"DEBUG: Processing {user.email} for classes {user_years}")
-#
-#         for year_key in user_years:
-#
-#             # Check Year folder exists
-#             if year_key not in folder_map:
-#                 print(f"WARNING: Year folder '{year_key}' not found in Drive.")
-#                 continue
-#
-#             # Check Term folder exists
-#             if current_term not in folder_map[year_key]:
-#                 print(f"WARNING: Term '{current_term}' not found under Year '{year_key}'.")
-#                 continue
-#
-#             # Final target folder
-#             folder_id_to_share = folder_map[year_key][current_term]
-#             print(f"DEBUG: Sharing Year='{year_key}', Term='{current_term}' (ID={folder_id_to_share}) with {user.email}")
-#
-#             try:
-#                 drive_service.permissions().create(
-#                     fileId=folder_id_to_share,
-#                     body={
-#                         "type": "user",
-#                         "role": role,
-#                         "emailAddress": user.email
-#                     },
-#                     fields="id",
-#                     sendNotificationEmail=False
-#                 ).execute()
-#
-#                 print(f"SUCCESS: Shared folder {folder_id_to_share} with {user.email}")
-#
-#             except HttpError as e:
-#                 print(f"ERROR: Failed to share with {user.email}: {e}")
-#
-#     print("==== Drive access process completed ====")
+    :param file_id: Root Drive folder ID (e.g., GEM_AI_ROOT_FOLDER)
+    :param emails: Comma-separated list of emails
+    :param role: Drive permission role ('reader' or 'writer')
+    :param db: SQLAlchemy Session
+    """
+
+    if db is None:
+        raise ValueError("A database session must be provided via `db` argument.")
+
+    print("==== Starting Drive access process ====")
+
+    # -------------------------
+    # Split & sanitize emails
+    # -------------------------
+    email_list = [email.strip() for email in emails.split(",") if email.strip()]
+    if not email_list:
+        print("No emails provided. Exiting.")
+        return
+
+    print(f"DEBUG: Emails to process: {email_list}")
+
+    # -------------------------
+    # Fetch users
+    # -------------------------
+    users = db.query(User).filter(User.email.in_(email_list)).all()
+    if not users:
+        print("No matching users found in DB. Exiting.")
+        return
+
+    missing = set(email_list) - {u.email for u in users}
+    if missing:
+        print(f"WARNING: Emails not found in DB: {missing}")
+
+    # -------------------------
+    # Load current term from DB
+    # -------------------------
+    current_term_record = db.query(CurrentTerm).first()
+    if not current_term_record:
+        print("ERROR: No current term found in DB. Exiting.")
+        return
+
+    current_term = current_term_record.term_name.strip().lower()
+    print(f"DEBUG: Current term from DB: '{current_term}'")
+
+    # -------------------------
+    # Helper to fetch subfolders
+    # -------------------------
+    def get_subfolders(parent_id: str):
+        try:
+            response = drive_service.files().list(
+                q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder'",
+                spaces="drive",
+                fields="files(id, name)"
+            ).execute()
+            return response.get("files", [])
+        except HttpError as e:
+            print(f"ERROR: Failed fetching subfolders for parent {parent_id}: {e}")
+            return []
+
+    # -------------------------
+    # 1. Fetch Year folders under root
+    # -------------------------
+    year_folders = get_subfolders(file_id)
+    print(f"DEBUG: Found Year folders: {[f['name'] for f in year_folders]}")
+
+    # -------------------------
+    # 2. Build Year → Term → folderId map
+    # -------------------------
+    folder_map = {}
+
+    for year in year_folders:
+        year_name = year["name"].strip().lower()
+        year_id = year["id"]
+
+        term_folders = get_subfolders(year_id)
+
+        folder_map[year_name] = {
+            term["name"].strip().lower(): term["id"]
+            for term in term_folders
+        }
+
+    print("DEBUG: Folder map:", folder_map)
+
+    # -------------------------
+    # 3. Grant access
+    # -------------------------
+    for user in users:
+
+        if not user.class_name:
+            print(f"Skipping {user.email}: class_name is empty.")
+            continue
+
+        # user may have multiple classes: "Year 1, Year 2"
+        user_years = [c.strip().lower() for c in user.class_name.split(",")]
+
+        print(f"DEBUG: Processing {user.email} for classes {user_years}")
+
+        for year_key in user_years:
+
+            # Check Year folder exists
+            if year_key not in folder_map:
+                print(f"WARNING: Year folder '{year_key}' not found in Drive.")
+                continue
+
+            # Check Term folder exists
+            if current_term not in folder_map[year_key]:
+                print(f"WARNING: Term '{current_term}' not found under Year '{year_key}'.")
+                continue
+
+            # Final target folder
+            folder_id_to_share = folder_map[year_key][current_term]
+            print(f"DEBUG: Sharing Year='{year_key}', Term='{current_term}' (ID={folder_id_to_share}) with {user.email}")
+
+            try:
+                drive_service.permissions().create(
+                    fileId=folder_id_to_share,
+                    body={
+                        "type": "user",
+                        "role": role,
+                        "emailAddress": user.email
+                    },
+                    fields="id",
+                    sendNotificationEmail=False
+                ).execute()
+
+                print(f"SUCCESS: Shared folder {folder_id_to_share} with {user.email}")
+
+            except HttpError as e:
+                print(f"ERROR: Failed to share with {user.email}: {e}")
+
+    print("==== Drive access process completed ====")
 
 
 
