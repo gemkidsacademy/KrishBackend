@@ -2165,8 +2165,11 @@ def update_knowledge_base(
 def reset_students(db: Session = Depends(get_db)):
     print("==== Reset Students Process Started ====")
     try:
-        students = db.scalars(select(User).where(User.role == "student")).all()
-        print(f"Fetched {len(students)} student(s) from the database.")
+        # Fetch all students except Admin
+        students = db.scalars(
+            select(User).where(User.role == "student", User.name != "Admin")
+        ).all()
+        print(f"Fetched {len(students)} student(s) (excluding Admin) from the database.")
 
         for student in students:
             print(f"Processing {student.email}...")
@@ -2180,12 +2183,15 @@ def reset_students(db: Session = Depends(get_db)):
                 except Exception as e:
                     print(f"❌ Failed to remove Drive access for {student.email}: {e}")
 
-        deleted_count = db.execute(delete(User).where(User.role == "student")).rowcount
+        # Delete only student users (exclude Admin)
+        deleted_count = db.execute(
+            delete(User).where(User.role == "student", User.name != "Admin")
+        ).rowcount
         db.commit()
-        print(f"Deleted {deleted_count} student(s) from the database.")
+        print(f"Deleted {deleted_count} student(s) from the database (Admin safe).")
         print("==== Reset Students Process Completed Successfully ====")
 
-        return {"message": "All students have been reset successfully!"}
+        return {"message": "All students have been reset successfully (Admin preserved)!"}
 
     except Exception as e:
         db.rollback()
