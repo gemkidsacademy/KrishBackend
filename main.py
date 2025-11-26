@@ -2160,6 +2160,18 @@ def update_knowledge_base(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update knowledge base: {e}")
 
+def get_subfolders(parent_id: str):
+    try:
+        response = drive_service.files().list(
+            q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder'",
+            spaces="drive",
+            fields="files(id, name)"
+        ).execute()
+        return response.get("files", [])
+    except HttpError as e:
+        print(f"ERROR: Failed fetching subfolders for parent {parent_id}: {e}")
+        return []
+
 #this endpoint removes goole drive access of all students and delete all students in the users table
 @app.post("/reset-students")
 def reset_students_endpoint(db: Session = Depends(get_db)):
