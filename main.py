@@ -2161,6 +2161,7 @@ def update_knowledge_base(
         raise HTTPException(status_code=500, detail=f"Failed to update knowledge base: {e}")
 
 #this endpoint removes goole drive access of all students and delete all students in the users table
+@app.post("/reset-students")
 def reset_students(db, drive_service, root_folder_id):
     """
     Resets all students:
