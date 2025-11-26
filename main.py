@@ -2161,49 +2161,102 @@ def update_knowledge_base(
         raise HTTPException(status_code=500, detail=f"Failed to update knowledge base: {e}")
 
 #this endpoint removes goole drive access of all students and delete all students in the users table
-@app.post("/reset-students")
-def reset_students(db: Session = Depends(get_db)):
+def reset_students(db, drive_service, root_folder_id):
     """
-    Reset all student users by:
-    1. Removing Google Drive permissions
-    2. Deleting students from the DB (skipping Admin)
+    Resets all students:
+      - Removes Drive access from all Year → Term folders for each student
+      - Deletes students from DB (except Admin)
     """
-    try:
-        print("==== Starting reset students process ====")
+    print("==== Starting reset students process ====")
 
-        # 1. Fetch all users except Admin
-        students = db.query(User).filter(User.name != "Admin").all()
-        if not students:
-            print("No students found to reset.")
-        else:
-            print(f"Found {len(students)} student(s) to reset.")
+    # 1. Fetch all users except Admin
+    students = db.query(User).filter(User.name != "Admin").all()
+    if not students:
+        print("No students found to reset.")
+        return {"message": "No students found."}
+    print(f"Found {len(students)} student(s) to reset.")
 
-        # 2. Remove Google Drive permissions
-        for student in students:
-            if hasattr(student, "permission_id") and student.permission_id:
-                try:
-                    drive_service.permissions().delete(
-                        fileId=FOLDER_ID,
-                        permissionId=student.permission_id
-                    ).execute()
-                    print(f"Removed Drive access for {student.email}")
-                except HttpError as e:
-                    print(f"Failed to remove Drive access for {student.email}: {e}")
+    # -------------------------
+    # Helper: fetch subfolders
+    # -------------------------
+    def get_subfolders(parent_id: str):
+        try:
+            response = drive_service.files().list(
+                q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder'",
+                spaces="drive",
+                fields="files(id, name)"
+            ).execute()
+            return response.get("files", [])
+        except HttpError as e:
+            print(f"ERROR: Failed fetching subfolders for parent {parent_id}: {e}")
+            return []
 
-        # 3. Delete students from DB (skip Admin)
-        deleted = db.execute(
-            delete(User).where(User.name != "Admin")
-        )
-        db.commit()
-        print(f"Deleted {deleted.rowcount} student(s) from the database.")
+    # -------------------------
+    # Build Year → Term → folder map
+    # -------------------------
+    year_folders = get_subfolders(root_folder_id)
+    folder_map = {}
+    for year in year_folders:
+        year_name = year["name"].strip().lower()
+        term_folders = get_subfolders(year["id"])
+        folder_map[year_name] = {term["name"].strip().lower(): term["id"] for term in term_folders}
 
-        print("==== Reset students process completed successfully ====")
-        return {"message": "All students have been reset successfully!"}
+    # -------------------------
+    # Fetch current term
+    # -------------------------
+    current_term_record = db.query(CurrentTerm).first()
+    if not current_term_record:
+        print("ERROR: No current term found in DB. Exiting.")
+        return {"message": "No current term found."}
+    current_term = current_term_record.term_name.strip().lower()
 
-    except Exception as e:
-        db.rollback()
-        print(f"ERROR during reset students: {e}")
-        raise HTTPException(status_code=500, detail="Failed to reset students")     
+    # 2. Remove Drive permissions for each student
+    for student in students:
+        if not student.class_name:
+            print(f"Skipping {student.email}: class_name is empty.")
+            continue
+
+        user_years = [c.strip().lower() for c in student.class_name.split(",")]
+        print(f"Processing {student.email} for classes {user_years}")
+
+        for year_key in user_years:
+            if year_key not in folder_map:
+                print(f"WARNING: Year folder '{year_key}' not found in Drive.")
+                continue
+            if current_term not in folder_map[year_key]:
+                print(f"WARNING: Term '{current_term}' not found under Year '{year_key}'.")
+                continue
+
+            folder_id_to_remove = folder_map[year_key][current_term]
+
+            try:
+                # List permissions on this folder
+                permissions = drive_service.permissions().list(
+                    fileId=folder_id_to_remove,
+                    fields="permissions(id, emailAddress)"
+                ).execute().get("permissions", [])
+
+                for perm in permissions:
+                    if perm.get("emailAddress") == student.email:
+                        drive_service.permissions().delete(
+                            fileId=folder_id_to_remove,
+                            permissionId=perm["id"]
+                        ).execute()
+                        print(f"Removed Drive access for {student.email} from folder {folder_id_to_remove}")
+                        break
+                else:
+                    print(f"No Drive permission found for {student.email} in folder {folder_id_to_remove}")
+
+            except HttpError as e:
+                print(f"Failed to remove Drive access for {student.email} in folder {folder_id_to_remove}: {e}")
+
+    # 3. Delete students from DB (skip Admin)
+    deleted = db.execute(delete(User).where(User.name != "Admin"))
+    db.commit()
+    print(f"Deleted {deleted.rowcount} student(s) from the database.")
+
+    print("==== Reset students process completed successfully ====")
+    return {"message": "All students have been reset successfully!"}     
 
 
 @app.get("/search")
