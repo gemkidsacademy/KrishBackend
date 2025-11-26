@@ -2163,62 +2163,35 @@ def update_knowledge_base(
 
 @app.post("/reset-students")
 def reset_students(db: Session = Depends(get_db)):
+    print("==== Reset Students Process Started ====")
     try:
-        # 1. Fetch all students
         students = db.scalars(select(User).where(User.role == "student")).all()
-        if not students:
-            return {"message": "No students found to reset."}
+        print(f"Fetched {len(students)} student(s) from the database.")
 
-        # 2. Get current term
-        current_term_record = db.query(CurrentTerm).first()
-        if not current_term_record:
-            raise HTTPException(status_code=400, detail="Current term not set in DB.")
-        current_term = current_term_record.term_name.strip().lower()
-
-        # 3. Build Year → Term folder map
-        year_folders = get_subfolders(ROOT_FOLDER_ID)
-        folder_map = {}
-        for year in year_folders:
-            year_name = year["name"].strip().lower()
-            term_folders = get_subfolders(year["id"])
-            folder_map[year_name] = {
-                term["name"].strip().lower(): term["id"]
-                for term in term_folders
-            }
-
-        # 4. Revoke Drive access for each student
         for student in students:
-            if not student.class_name:
-                continue
-            user_years = [c.strip().lower() for c in student.class_name.split(",")]
-            for year_key in user_years:
-                if year_key not in folder_map:
-                    print(f"WARNING: Year folder '{year_key}' not found.")
-                    continue
-                if current_term not in folder_map[year_key]:
-                    print(f"WARNING: Term folder '{current_term}' not found under year '{year_key}'.")
-                    continue
-                folder_id_to_remove = folder_map[year_key][current_term]
+            print(f"Processing {student.email}...")
+            if student.permission_id:
                 try:
-                    # Delete permission by email (same as give_drive_access)
                     drive_service.permissions().delete(
-                        fileId=folder_id_to_remove,
-                        permissionId=student.permission_id  # or get by email if you store it
+                        fileId=FOLDER_ID,
+                        permissionId=student.permission_id
                     ).execute()
-                    print(f"Removed Drive access for {student.email}")
-                except HttpError as e:
-                    print(f"Failed to remove Drive access for {student.email}: {e}")
+                    print(f"✅ Removed Drive access for {student.email}")
+                except Exception as e:
+                    print(f"❌ Failed to remove Drive access for {student.email}: {e}")
 
-        # 5. Delete students from DB
-        db.execute(delete(User).where(User.role == "student"))
+        deleted_count = db.execute(delete(User).where(User.role == "student")).rowcount
         db.commit()
+        print(f"Deleted {deleted_count} student(s) from the database.")
+        print("==== Reset Students Process Completed Successfully ====")
 
         return {"message": "All students have been reset successfully!"}
 
     except Exception as e:
         db.rollback()
-        print("Error:", e)
+        print("❌ Error during reset students process:", e)
         raise HTTPException(status_code=500, detail="Failed to reset students")
+
      
 
 
