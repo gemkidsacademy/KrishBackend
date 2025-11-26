@@ -2160,45 +2160,50 @@ def update_knowledge_base(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update knowledge base: {e}")
 
-
+#this endpoint removes goole drive access of all students and delete all students in the users table
 @app.post("/reset-students")
 def reset_students(db: Session = Depends(get_db)):
-    print("==== Reset Students Process Started ====")
+    """
+    Reset all student users by:
+    1. Removing Google Drive permissions
+    2. Deleting students from the DB (skipping Admin)
+    """
     try:
-        # Fetch all students except Admin
-        students = db.scalars(
-            select(User).where(User.role == "student", User.name != "Admin")
-        ).all()
-        print(f"Fetched {len(students)} student(s) (excluding Admin) from the database.")
+        print("==== Starting reset students process ====")
 
+        # 1. Fetch all users except Admin
+        students = db.query(User).filter(User.name != "Admin").all()
+        if not students:
+            print("No students found to reset.")
+        else:
+            print(f"Found {len(students)} student(s) to reset.")
+
+        # 2. Remove Google Drive permissions
         for student in students:
-            print(f"Processing {student.email}...")
-            if student.permission_id:
+            if hasattr(student, "permission_id") and student.permission_id:
                 try:
                     drive_service.permissions().delete(
                         fileId=FOLDER_ID,
                         permissionId=student.permission_id
                     ).execute()
-                    print(f"✅ Removed Drive access for {student.email}")
-                except Exception as e:
-                    print(f"❌ Failed to remove Drive access for {student.email}: {e}")
+                    print(f"Removed Drive access for {student.email}")
+                except HttpError as e:
+                    print(f"Failed to remove Drive access for {student.email}: {e}")
 
-        # Delete only student users (exclude Admin)
-        deleted_count = db.execute(
-            delete(User).where(User.role == "student", User.name != "Admin")
-        ).rowcount
+        # 3. Delete students from DB (skip Admin)
+        deleted = db.execute(
+            delete(User).where(User.name != "Admin")
+        )
         db.commit()
-        print(f"Deleted {deleted_count} student(s) from the database (Admin safe).")
-        print("==== Reset Students Process Completed Successfully ====")
+        print(f"Deleted {deleted.rowcount} student(s) from the database.")
 
-        return {"message": "All students have been reset successfully (Admin preserved)!"}
+        print("==== Reset students process completed successfully ====")
+        return {"message": "All students have been reset successfully!"}
 
     except Exception as e:
         db.rollback()
-        print("❌ Error during reset students process:", e)
-        raise HTTPException(status_code=500, detail="Failed to reset students")
-
-     
+        print(f"ERROR during reset students: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset students")     
 
 
 @app.get("/search")
