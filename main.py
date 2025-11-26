@@ -27,7 +27,7 @@ from pydantic import BaseModel, EmailStr
 from passlib.hash import pbkdf2_sha256
 
 # SQLAlchemy
-from sqlalchemy import or_, create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float, func, ARRAY, JSON, select
+from sqlalchemy import or_, create_engine, Column, Integer, String, DateTime, ForeignKey, Boolean, Text, text, Float, func, ARRAY, JSON, select, delete
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 
