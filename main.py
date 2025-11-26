@@ -2162,59 +2162,52 @@ def update_knowledge_base(
 
 #this endpoint removes goole drive access of all students and delete all students in the users table
 @app.post("/reset-students")
-def reset_students(db, drive_service, root_folder_id):
+def reset_students_endpoint(db: Session = Depends(get_db)):
     """
-    Resets all students:
-      - Removes Drive access from all Year → Term folders for each student
-      - Deletes students from DB (except Admin)
+    Reset all students:
+      - Remove Drive access from all Year → Term folders
+      - Delete students from DB (except Admin)
+    Returns a JSON response compatible with front end fetch.
     """
+    response = {"status": "success", "message": "", "details": []}
+
     print("==== Starting reset students process ====")
 
     # 1. Fetch all users except Admin
     students = db.query(User).filter(User.name != "Admin").all()
     if not students:
         print("No students found to reset.")
-        return {"message": "No students found."}
+        response["status"] = "no_students"
+        response["message"] = "No students found to reset."
+        return response
+
     print(f"Found {len(students)} student(s) to reset.")
 
-    # -------------------------
-    # Helper: fetch subfolders
-    # -------------------------
-    def get_subfolders(parent_id: str):
-        try:
-            response = drive_service.files().list(
-                q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder'",
-                spaces="drive",
-                fields="files(id, name)"
-            ).execute()
-            return response.get("files", [])
-        except HttpError as e:
-            print(f"ERROR: Failed fetching subfolders for parent {parent_id}: {e}")
-            return []
-
-    # -------------------------
-    # Build Year → Term → folder map
-    # -------------------------
-    year_folders = get_subfolders(root_folder_id)
+    # 2. Build Year → Term → folder map using global DEMO_FOLDER_ID
+    year_folders = get_subfolders(DEMO_FOLDER_ID)
     folder_map = {}
     for year in year_folders:
         year_name = year["name"].strip().lower()
         term_folders = get_subfolders(year["id"])
         folder_map[year_name] = {term["name"].strip().lower(): term["id"] for term in term_folders}
 
-    # -------------------------
-    # Fetch current term
-    # -------------------------
+    # 3. Fetch current term
     current_term_record = db.query(CurrentTerm).first()
     if not current_term_record:
         print("ERROR: No current term found in DB. Exiting.")
-        return {"message": "No current term found."}
+        response["status"] = "error"
+        response["message"] = "No current term found in DB."
+        return response
     current_term = current_term_record.term_name.strip().lower()
 
-    # 2. Remove Drive permissions for each student
+    # 4. Remove Drive permissions
     for student in students:
+        student_result = {"email": student.email, "removed": [], "skipped": []}
+
         if not student.class_name:
             print(f"Skipping {student.email}: class_name is empty.")
+            student_result["skipped"].append("Empty class_name")
+            response["details"].append(student_result)
             continue
 
         user_years = [c.strip().lower() for c in student.class_name.split(",")]
@@ -2223,15 +2216,16 @@ def reset_students(db, drive_service, root_folder_id):
         for year_key in user_years:
             if year_key not in folder_map:
                 print(f"WARNING: Year folder '{year_key}' not found in Drive.")
+                student_result["skipped"].append(f"Year folder '{year_key}' not found")
                 continue
             if current_term not in folder_map[year_key]:
                 print(f"WARNING: Term '{current_term}' not found under Year '{year_key}'.")
+                student_result["skipped"].append(f"Term '{current_term}' not found")
                 continue
 
             folder_id_to_remove = folder_map[year_key][current_term]
 
             try:
-                # List permissions on this folder
                 permissions = drive_service.permissions().list(
                     fileId=folder_id_to_remove,
                     fields="permissions(id, emailAddress)"
@@ -2244,21 +2238,25 @@ def reset_students(db, drive_service, root_folder_id):
                             permissionId=perm["id"]
                         ).execute()
                         print(f"Removed Drive access for {student.email} from folder {folder_id_to_remove}")
+                        student_result["removed"].append(folder_id_to_remove)
                         break
                 else:
-                    print(f"No Drive permission found for {student.email} in folder {folder_id_to_remove}")
+                    student_result["skipped"].append(f"No permission found in folder {folder_id_to_remove}")
 
             except HttpError as e:
                 print(f"Failed to remove Drive access for {student.email} in folder {folder_id_to_remove}: {e}")
+                student_result["skipped"].append(f"Failed to remove permission: {e}")
 
-    # 3. Delete students from DB (skip Admin)
+        response["details"].append(student_result)
+
+    # 5. Delete students from DB (except Admin)
     deleted = db.execute(delete(User).where(User.name != "Admin"))
     db.commit()
     print(f"Deleted {deleted.rowcount} student(s) from the database.")
+    response["message"] = f"Deleted {deleted.rowcount} student(s) and removed Drive permissions."
 
     print("==== Reset students process completed successfully ====")
-    return {"message": "All students have been reset successfully!"}     
-
+    return response
 
 @app.get("/search")
 async def search_pdfs(
