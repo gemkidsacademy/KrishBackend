@@ -233,11 +233,13 @@ class FranchiseLocation(Base):
 
 class UserListItem(BaseModel):
     id: int
+    student_id: str               # <-- NEW FIELD
     name: str
     email: str
     phone_number: Optional[str] = None
     class_name: Optional[str] = None
-    class_day: Optional[str] = None  # <-- added
+    class_day: Optional[str] = None
+
     class Config:
         orm_mode = True  # allows SQLAlchemy models to be converted to Pydantic models
 
@@ -305,6 +307,7 @@ class User(Base):
     phone_number = Column(String, nullable=False)
     class_name = Column(String, nullable=False)
     class_day = Column(String, nullable=False)  # <-- added
+    student_id = Column(String, unique=True, nullable=False)  # <-- NEW FIELD
     password = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     # Establish relationship with sessions
@@ -444,14 +447,16 @@ def get_all_users(db: Session = Depends(get_db)):
     return [
         UserListItem(
             id=u.id,
+            student_id=u.student_id,   # <-- NEW FIELD
             name=u.name,
             email=u.email,
             phone_number=u.phone_number,
             class_name=u.class_name,
-            class_day=u.class_day  # <-- explicitly include
+            class_day=u.class_day
         )
         for u in users
-    ]    
+    ]
+ 
 @app.get("/api/openai-usage")
 def get_openai_usage(db: Session = Depends(get_db)):
     """
@@ -1316,26 +1321,32 @@ def get_knowledge_base(db: Session = Depends(get_db)):
 #here
 @app.post("/add_user")
 def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
-    # Check if email already exists
-    existing_user = db.query(User).filter(User.email == user_request.email).first()
-    if existing_user:
+    # ---------- Check for duplicate email ----------
+    existing_email = db.query(User).filter(User.email == user_request.email).first()
+    if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash the password using Werkzeug
+    # ---------- Check for duplicate student_id ----------
+    existing_student = db.query(User).filter(User.student_id == user_request.student_id).first()
+    if existing_student:
+        raise HTTPException(status_code=400, detail="Student ID already registered")
+
+    # ---------- Hash the password ----------
     hashed_password = generate_password_hash(user_request.password)
 
-    # Create new user instance with class_day
+    # ---------- Create new user ----------
     new_user = User(
         name=user_request.name,
         email=user_request.email,
         phone_number=user_request.phone_number,
         class_name=user_request.class_name,
-        class_day=user_request.class_day,  # <-- new field
+        class_day=user_request.class_day,
+        student_id=user_request.student_id,   # <-- NEW FIELD
         password=hashed_password,
         created_at=datetime.utcnow()
     )
 
-    # Save to DB
+    # ---------- Save to DB ----------
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -1343,7 +1354,9 @@ def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
     # ---------- Grant Google Drive Access ----------
     give_drive_access(DEMO_FOLDER_ID, user_request.email, role="reader", db=db)
 
-    return {"message": f"User '{new_user.name}' added successfully and Drive access granted!"}
+    return {
+        "message": f"User '{new_user.name}' added successfully with Student ID '{new_user.student_id}'. Drive access granted!"
+    }
 
 @app.put("/edit-user/{user_id}")
 def edit_user(
@@ -1351,34 +1364,44 @@ def edit_user(
     user_request: EditUserRequest = Body(...),
     db: Session = Depends(get_db)
 ):
-    # Fetch the user
+    # ----- Fetch the user -----
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Check if email is being updated and is unique
+    # ----- Check if email is being updated -----
     if user.email != user_request.email:
-        existing_user = db.query(User).filter(User.email == user_request.email).first()
-        if existing_user:
+        existing_email = db.query(User).filter(User.email == user_request.email).first()
+        if existing_email:
             raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Update fields
+    # ----- Check if student_id is being updated -----
+    if user.student_id != user_request.student_id:
+        existing_student = db.query(User).filter(
+            User.student_id == user_request.student_id
+        ).first()
+        if existing_student:
+            raise HTTPException(status_code=400, detail="Student ID already registered")
+
+    # ----- Apply updates -----
     user.name = user_request.name
     user.email = user_request.email
     user.phone_number = user_request.phone_number
     user.class_name = user_request.class_name
-    user.class_day = user_request.class_day  # <-- added
+    user.class_day = user_request.class_day
+    user.student_id = user_request.student_id  # <-- NEW FIELD UPDATE
 
-    # Only update password if provided
+    # ----- Update password only if provided -----
     if user_request.password:
         user.password = generate_password_hash(user_request.password)
 
-    user.updated_at = datetime.utcnow()  # optional: track updates
+    user.updated_at = datetime.utcnow()  # optional tracking
 
     db.commit()
     db.refresh(user)
 
-    return {"message": f"User '{user.name}' updated successfully!"}        
+    return {"message": f"User '{user.name}' updated successfully!"}
+
 
 #----------------------functions
 
@@ -2562,6 +2585,170 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
             file.file,
             sep=None,
             engine="python",
+            dtype={"phone_number": str, "student_id": str},  # <-- support student_id
+            encoding="utf-8-sig"
+        )
+
+        if df.empty:
+            raise HTTPException(status_code=400, detail="CSV file is empty")
+
+        # Normalize column names
+        df.columns = df.columns.str.strip().str.lower()
+        print(f"DEBUG: Columns after normalization: {list(df.columns)}")
+
+        # Required CSV fields
+        required_columns = {"name", "email", "class_name", "class_day", "password", "student_id"}
+        missing_columns = required_columns - set(df.columns)
+
+        if missing_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV file must contain columns: {required_columns}"
+            )
+
+        # --- Normalize phone number format ---
+        def fix_phone_number(x):
+            if pd.isna(x):
+                return None
+            try:
+                phone = str(int(float(x)))
+            except:
+                phone = str(x).strip().lstrip("'")
+            phone = phone.replace(" ", "").replace("-", "")
+            if phone.startswith("+"):
+                return phone
+            elif phone.startswith("04"):
+                return f"+61{phone[1:]}"
+            elif phone.startswith("4"):
+                return f"+61{phone}"
+            elif phone.startswith("61"):
+                return f"+{phone}"
+            else:
+                return phone
+
+        if "phone_number" in df.columns:
+            df["phone_number"] = df["phone_number"].apply(fix_phone_number)
+
+        # --- Fetch existing values to detect duplicates ---
+        existing_users = db.query(User.email, User.phone_number, User.student_id).all()
+
+        existing_emails = {u.email for u in existing_users if u.email}
+        existing_phones = {u.phone_number for u in existing_users if u.phone_number}
+        existing_student_ids = {u.student_id for u in existing_users if u.student_id}
+
+        print(
+            f"DEBUG: Existing emails={len(existing_emails)}, "
+            f"phones={len(existing_phones)}, "
+            f"student_ids={len(existing_student_ids)}"
+        )
+
+        users_to_add = []
+        skipped_users = []
+
+        # --- Process each row ---
+        for index, row in df.iterrows():
+            email = (row.get("email") or "").strip()
+            phone = row.get("phone_number")
+            student_id = (row.get("student_id") or "").strip()
+
+            # Duplicate checks
+            if (
+                email in existing_emails
+                or (phone and phone in existing_phones)
+                or student_id in existing_student_ids
+            ):
+                skipped_users.append({
+                    "name": row.get("name"),
+                    "email": email,
+                    "phone_number": phone,
+                    "student_id": student_id,
+                    "reason": "Duplicate email, phone number, or student_id"
+                })
+                print(f"DEBUG: Skipped duplicate -> {email} / {phone} / {student_id}")
+                continue
+
+            try:
+                user_obj = User(
+                    name=row["name"].strip(),
+                    email=email,
+                    phone_number=phone,
+                    class_name=row.get("class_name"),
+                    class_day=row.get("class_day"),
+                    student_id=student_id,  # <-- NEW
+                    password=row.get("password") or "placeholder",
+                )
+
+                users_to_add.append(user_obj)
+                print(f"DEBUG: Prepared new user {index}: {email} / {student_id}")
+
+            except Exception as e:
+                skipped_users.append({
+                    "name": row.get("name"),
+                    "email": email,
+                    "phone_number": phone,
+                    "student_id": student_id,
+                    "reason": f"Error processing row: {e}"
+                })
+                print(f"ERROR: Failed to process row {index}: {e}")
+                continue
+
+        if not users_to_add and not skipped_users:
+            raise HTTPException(status_code=400, detail="No valid users found in CSV")
+
+        # --- Insert new users ---
+        if users_to_add:
+            db.add_all(users_to_add)
+            db.commit()
+            print(f"DEBUG: Inserted {len(users_to_add)} users into DB")
+
+        # --- Grant Google Drive access ---
+        for u in users_to_add:
+            try:
+              give_drive_access(DEMO_FOLDER_ID, u.email, role="reader", db=db)
+              print(f"DEBUG: Drive access granted -> {u.email}")
+            except Exception as e:
+              print(f"ERROR: Failed to grant Drive access: {u.email} -> {e}")
+
+        # --- Response ---
+        return {
+            "added_users": [
+                {
+                    "name": u.name,
+                    "email": u.email,
+                    "phone_number": u.phone_number,
+                    "class_name": u.class_name,
+                    "class_day": u.class_day,
+                    "student_id": u.student_id,  # <-- INCLUDED
+                }
+                for u in users_to_add
+            ],
+            "skipped_users": skipped_users,
+            "summary": {
+                "added": len(users_to_add),
+                "skipped": len(skipped_users),
+                "total_rows": len(df),
+            }
+        }
+
+    except Exception as e:
+        print(f"EXCEPTION: Bulk upload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+"""
+previous version of bulk upload without student_id
+@app.post("/api/users/bulk")
+async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    print("DEBUG: Bulk CSV upload request received")
+
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Invalid file type. CSV required.")
+
+    try:
+        # Read CSV file safely
+        df = pd.read_csv(
+            file.file,
+            sep=None,
+            engine="python",
             dtype={"phone_number": str},
             encoding="utf-8-sig"
         )
@@ -2690,6 +2877,7 @@ async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print(f"EXCEPTION: Bulk upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+ """
 
 
 # Utility: hash password
