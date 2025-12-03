@@ -250,7 +250,11 @@ class UserResponse(BaseModel):
     email: str
     phone_number: Optional[str] = None
     class_name: Optional[str] = None
-    class_day: Optional[str] = None  # <-- added
+    class_day: Optional[str] = None
+    student_id: str                     # <-- NEW FIELD
+
+    class Config:
+        orm_mode = True
  
 
 class UsageResponse(BaseModel):
