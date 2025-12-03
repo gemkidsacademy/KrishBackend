@@ -273,7 +273,8 @@ class AddUserRequest(BaseModel):
     email: str
     phone_number: str
     class_name: str
-    class_day: str  # <-- added
+    class_day: str
+    student_id: str    # <-- REQUIRED
     password: str
  
 class KnowledgeBaseRequest(BaseModel):
