@@ -289,7 +289,8 @@ class EditUserRequest(BaseModel):
     email: EmailStr
     phone_number: str
     class_name: str
-    class_day: str  # new field for class day
+    class_day: str
+    student_id: str                 # <-- NEW FIELD
     password: Optional[str] = None  # only update if provided
  
 class KnowledgeBase(Base):
