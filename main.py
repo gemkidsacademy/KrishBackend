@@ -751,15 +751,19 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
 """
 
 def send_otp_email(to_email: str, otp: str):
+    # 🔎 TEMP DEBUG — remove after confirming
+    print("[DEBUG] SENDGRID KEY PRESENT:", bool(SENDGRID_API_KEY))
+    print("[DEBUG] SENDGRID KEY FORMAT OK:", SENDGRID_API_KEY.startswith("SG."))
+
     message = Mail(
         from_email='noreply@gemkidsacademy.com.au',
         to_emails=to_email,
         subject='Your OTP Code',
         html_content=f'<p>Your OTP code is <strong>{otp}</strong>. It will expire in 5 minutes.</p>',
-        
     )
-     # Set reply_to correctly
+
     message.reply_to = Email('do-not-reply@gemkidsacademy.com.au')
+
     try:
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         response = sg.send(message)
