@@ -2348,13 +2348,6 @@ async def search_pdfs(
         print("[INFO] Fetching PDF list from Google Drive for the first time...")
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
         pdf_listing_done = True
-    # ------------------ Step 1b: Get current term from DB ------------------
-    row = db.execute(select(CurrentTerm)).scalar_one_or_none()
-    
-    current_term = None
-    if row:
-        current_term = row.term_name.lower().replace("term", "").strip()
-        print(f"[INFO] Current term from DB: {current_term}")
 
     # Normalize class names
     
@@ -2369,19 +2362,18 @@ async def search_pdfs(
     class_names_list = [cn.strip().lower() for cn in class_name.split(",")] if class_name else []
     #here
     pdf_files = []
-
     for pdf in all_pdfs:
-        pdf_path = pdf.get("path", "").lower()
-    
-        # Filter by class if provided
-        if class_names_list and not matches_class(pdf_path, class_names_list):
+        pdf_path = pdf.get("path", "")
+        
+        # If no class filter → accept ALL PDFs
+        if not class_names_list:
+            pdf_files.append(pdf)
             continue
     
-        # Filter by CURRENT TERM
-        if current_term and f"term {current_term}" not in pdf_path:
-            continue
-    
-        pdf_files.append(pdf)        #here
+        # Use robust class matching
+        if matches_class(pdf_path, class_names_list):
+            pdf_files.append(pdf)
+        #here
 
     context_gist = get_context_gist(user_id)
     is_first_query = len(user_contexts[user_id]) == 0
@@ -2461,22 +2453,11 @@ async def search_pdfs(
                 top_chunks.append(chunk_meta)
         
             # Optional: Filter by class_name if provided
-            # Optional: Filter by class_name if provided
             if class_list:
-                top_chunks = [
-                    c for c in top_chunks
-                    if matches_class(normalize_pdf_name(c.get("pdf_name", "")), class_list)
-                ]
-            
-            # Filter by CURRENT TERM
-            if current_term:
-                top_chunks = [
-                    c for c in top_chunks
-                    if f"term {current_term}" in normalize_pdf_name(c.get("pdf_name", "")).lower()
-                ]
-            
+                top_chunks = [c for c in top_chunks if matches_class(normalize_pdf_name(c.get("pdf_name","")), class_list)]
+        
             # Sort by score descending
-            top_chunks = sorted(top_chunks, key=lambda x: x["score"], reverse=True)[:TOP_K]
+            top_chunks = sorted(top_chunks, key=lambda x: x['score'], reverse=True)[:TOP_K]
         else:
             top_chunks = []  # fallback if FAISS not initialized
 
