@@ -2353,7 +2353,7 @@ async def search_pdfs(
     
     current_term = None
     if row:
-        current_term = row.term_name.lower().strip()
+        current_term = row.term_name.lower().replace("term", "").strip()
         print(f"[INFO] Current term from DB: {current_term}")
 
     # Normalize class names
