@@ -1280,6 +1280,7 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
             continue
 
         # user may have multiple classes: "Year 1, Year 2"
+        print(f"DEBUG: Raw class_name from DB = '{user.class_name}'")
         user_years = [c.strip().lower() for c in user.class_name.split(",")]
 
         print(f"DEBUG: Processing {user.email} for classes {user_years}")
@@ -1288,7 +1289,10 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
 
             # Check Year folder exists
             if year_key not in folder_map:
-                print(f"WARNING: Year folder '{year_key}' not found in Drive.")
+                print(
+                    f"WARNING: Year folder '{year_key}' not found in Drive. "
+                    f"Available folders: {list(folder_map.keys())}"
+                )
                 continue
 
             # Check Term folder exists
@@ -1298,10 +1302,27 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
 
             # Final target folder
             folder_id_to_share = folder_map[year_key][current_term]
+            print(
+                f"DRIVE URL: https://drive.google.com/drive/folders/{folder_id_to_share}"
+            )
             print(f"DEBUG: Sharing Year='{year_key}', Term='{current_term}' (ID={folder_id_to_share}) with {user.email}")
 
             try:
-                drive_service.permissions().create(
+                print("--------------------------------------------------")
+                print(f"Creating permission...")
+                print(f"Email      : {user.email}")
+                print(f"Folder ID  : {folder_id_to_share}")
+                print(f"Role       : {role}")
+                print("--------------------------------------------------")
+                folder_meta = drive_service.files().get(
+                    fileId=folder_id_to_share,
+                    fields="id,name"
+                ).execute()
+
+                print("DEBUG: Target Folder Metadata")
+                print(folder_meta)
+
+                permission = drive_service.permissions().create(
                     fileId=folder_id_to_share,
                     body={
                         "type": "user",
@@ -1311,11 +1332,57 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                     fields="id",
                     sendNotificationEmail=False
                 ).execute()
+                print(
+                    f"SUCCESS: Permission created. "
+                    f"Permission ID={permission.get('id')}"
+                )
+
+                # Verify permission exists
+                permissions = drive_service.permissions().list(
+                    fileId=folder_id_to_share,
+                    fields="permissions(id,emailAddress,role)"
+                ).execute()
+
+                print("DEBUG: Folder permissions after share:")
+
+                user_found = False
+
+                for p in permissions.get("permissions", []):
+                    print(
+                        f"    email={p.get('emailAddress')} "
+                        f"role={p.get('role')} "
+                        f"id={p.get('id')}"
+                    )
+
+                    if p.get("emailAddress", "").lower() == user.email.lower():
+                        user_found = True
+
+                if user_found:
+                    print(f"VERIFIED: {user.email} exists in folder permissions")
+                else:
+                    print(f"WARNING: {user.email} NOT FOUND in folder permissions")
+
+                print(
+                    f"SUCCESS: Permission created. "
+                    f"Permission ID={permission.get('id')}"
+                )
 
                 print(f"SUCCESS: Shared folder {folder_id_to_share} with {user.email}")
 
             except HttpError as e:
-                print(f"ERROR: Failed to share with {user.email}: {e}")
+
+                print("========== GOOGLE DRIVE ERROR ==========")
+                print(f"User Email : {user.email}")
+                print(f"Folder ID  : {folder_id_to_share}")
+
+                try:
+                    print("Response:")
+                    print(e.content.decode())
+                except:
+                    pass
+
+                print(str(e))
+                print("========================================")
 
     print("==== Drive access process completed ====")
 
@@ -1334,41 +1401,80 @@ def get_knowledge_base(db: Session = Depends(get_db)):
 #here
 @app.post("/add_user")
 def add_user(user_request: AddUserRequest, db: Session = Depends(get_db)):
+
+    print("\n========== ADD USER REQUEST ==========")
+    print(f"Name        : {user_request.name}")
+    print(f"Email       : {user_request.email}")
+    print(f"Student ID  : {user_request.student_id}")
+    print(f"Class Name  : {user_request.class_name}")
+    print(f"Class Day   : {user_request.class_day}")
+
     # ---------- Check for duplicate email ----------
-    existing_email = db.query(User).filter(User.email == user_request.email).first()
+    existing_email = db.query(User).filter(
+        User.email == user_request.email
+    ).first()
+
     if existing_email:
+        print(f"ERROR: Email already exists -> {user_request.email}")
         raise HTTPException(status_code=400, detail="Email already registered")
 
     # ---------- Check for duplicate student_id ----------
-    existing_student = db.query(User).filter(User.student_id == user_request.student_id).first()
+    existing_student = db.query(User).filter(
+        User.student_id == user_request.student_id
+    ).first()
+
     if existing_student:
+        print(f"ERROR: Student ID already exists -> {user_request.student_id}")
         raise HTTPException(status_code=400, detail="Student ID already registered")
 
-    # ---------- Hash the password ----------
+    print("DEBUG: Generating password hash")
+
     hashed_password = generate_password_hash(user_request.password)
 
-    # ---------- Create new user ----------
+    print("DEBUG: Creating user record")
+
     new_user = User(
         name=user_request.name,
         email=user_request.email,
         phone_number=user_request.phone_number,
         class_name=user_request.class_name,
         class_day=user_request.class_day,
-        student_id=user_request.student_id,   # <-- NEW FIELD
+        student_id=user_request.student_id,
         password=hashed_password,
         created_at=datetime.utcnow()
     )
 
-    # ---------- Save to DB ----------
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    # ---------- Grant Google Drive Access ----------
-    give_drive_access(DEMO_FOLDER_ID, user_request.email, role="reader", db=db)
+    print(f"SUCCESS: User created with DB ID={new_user.id}")
+
+    print(
+        f"DEBUG: Calling give_drive_access() "
+        f"for email={user_request.email}"
+    )
+
+    try:
+        give_drive_access(
+            DEMO_FOLDER_ID,
+            user_request.email,
+            role="reader",
+            db=db
+        )
+    except Exception as e:
+        print("ERROR: give_drive_access failed")
+        print(str(e))
+        raise
+
+    print("========== ADD USER COMPLETE ==========\n")
 
     return {
-        "message": f"User '{new_user.name}' added successfully with Student ID '{new_user.student_id}'. Drive access granted!"
+        "message": (
+            f"User '{new_user.name}' added successfully "
+            f"with Student ID '{new_user.student_id}'. "
+            f"Drive access granted!"
+        )
     }
 
 @app.put("/edit-user/{user_id}")
