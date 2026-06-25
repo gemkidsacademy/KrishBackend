@@ -755,6 +755,10 @@ def send_otp_email(to_email: str, otp: str):
     print("[DEBUG] SENDGRID KEY PRESENT:", bool(SENDGRID_API_KEY))
     print("[DEBUG] SENDGRID KEY FORMAT OK:", SENDGRID_API_KEY.startswith("SG."))
 
+    # Add these two lines here
+    print("[DEBUG] KEY LENGTH:", len(SENDGRID_API_KEY))
+    print("[DEBUG] KEY PREFIX:", SENDGRID_API_KEY[:15] + "...")
+
     message = Mail(
         from_email='noreply@gemkidsacademy.com.au',
         to_emails=to_email,
@@ -797,14 +801,18 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     otp_store[email] = {"otp": otp, "expiry": time.time() + 300}
     print(f"[DEBUG] Stored OTP for {email} with 5 min expiry")
 
-    # --- Send OTP via email ---
-    try:
-        print(f"[DEBUG] Attempting to send OTP to {email} via email")
-        send_otp_email(email, otp)
-        print(f"[INFO] Successfully sent OTP to {email}")
-    except Exception as e:
-        print(f"[ERROR] Error sending OTP to {email}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error sending email: {e}")
+   # --- Send OTP via email ---
+# TEMPORARILY DISABLED FOR LOCAL TESTING
+#
+# try:
+#     print(f"[DEBUG] Attempting to send OTP to {email} via email")
+#     send_otp_email(email, otp)
+#     print(f"[INFO] Successfully sent OTP to {email}")
+# except Exception as e:
+#     print(f"[ERROR] Error sending OTP to {email}: {e}")
+#     raise HTTPException(status_code=500, detail=f"Error sending email: {e}")
+
+    print(f"[DEBUG] Email sending skipped. OTP for {email} is: {otp}")
 
     return {"message": "OTP sent successfully"}
 
