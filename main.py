@@ -42,6 +42,9 @@ from datetime import datetime, timedelta
 
 import json
 import os
+
+
+
 import io
 import math
 import tempfile
@@ -100,6 +103,21 @@ MODEL_COST = {
 # App & CORS
 # -----------------------------
 load_dotenv()
+print("\n========== ENVIRONMENT CHECK ==========")
+
+print("OPENAI_API_KEY_S:", bool(os.getenv("OPENAI_API_KEY_S")))
+print("SENDGRID_API_KEY:", bool(os.getenv("SENDGRID_API_KEY")))
+print("GCP_SERVICE_ACCOUNT_JSON:", bool(os.getenv("GCP_SERVICE_ACCOUNT_JSON")))
+print("GOOGLE_APPLICATION_CREDENTIALS_JSON:", bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")))
+print("DATABASE_URL:", bool(os.getenv("DATABASE_URL")))
+
+print("OPENAI PREFIX:",
+      os.getenv("OPENAI_API_KEY_S", "")[:12])
+
+print("SENDGRID PREFIX:",
+      os.getenv("SENDGRID_API_KEY", "")[:12])
+
+print("=======================================\n")
 app = FastAPI()
 
 
