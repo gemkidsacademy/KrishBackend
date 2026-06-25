@@ -2489,7 +2489,11 @@ async def search_pdfs(
     if is_first_query:
         query_type = "pdf_only"
 
-    use_context_only = query_type == "context_only"
+    # -------------------------------------------------
+    # TEMPORARILY DISABLE CONTEXT-ONLY MODE
+    # use_context_only = query_type == "context_only"
+    use_context_only = False
+    # -------------------------------------------------
 
     # ------------------ Step 3: Handle PDF link requests ------------------
     pdf_urls_to_send = []
