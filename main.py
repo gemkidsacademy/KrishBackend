@@ -379,6 +379,7 @@ with Session(engine) as session:
            phone_number=ADMIN_PHONE,
            class_name=ADMIN_CLASS,
            class_day="N/A",  # <-- add this
+           student_id="ADMIN001",
            password=hashed_password
        )
         session.add(new_admin)
