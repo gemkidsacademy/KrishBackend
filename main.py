@@ -105,14 +105,14 @@ MODEL_COST = {
 load_dotenv()
 print("\n========== ENVIRONMENT CHECK ==========")
 
-print("OPENAI_API_KEY_S:", bool(os.getenv("OPENAI_API_KEY_S")))
+print("OPENAI_API_KEY_S:", bool(os.getenv("OPENAI_API_KEY")))
 print("SENDGRID_API_KEY:", bool(os.getenv("SENDGRID_API_KEY")))
 print("GCP_SERVICE_ACCOUNT_JSON:", bool(os.getenv("GCP_SERVICE_ACCOUNT_JSON")))
 print("GOOGLE_APPLICATION_CREDENTIALS_JSON:", bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")))
 print("DATABASE_URL:", bool(os.getenv("DATABASE_URL")))
 
 print("OPENAI PREFIX:",
-      os.getenv("OPENAI_API_KEY_S", "")[:12])
+      os.getenv("OPENAI_API_KEY", "")[:12])
 
 print("SENDGRID PREFIX:",
       os.getenv("SENDGRID_API_KEY", "")[:12])
@@ -138,7 +138,7 @@ app.add_middleware(
 # OpenAI Setup
 # -----------------------------
 openai_client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY_S")
+    api_key=os.environ.get("OPENAI_API_KEY")
 )
 
 
@@ -545,7 +545,7 @@ async def guest_chatbot(request: ChatRequestGuestChatbot, db: Session = Depends(
 
         # Step 2: Create FAISS vector store
         print("[STEP 2] Creating FAISS vector store...")
-        embeddings = OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY_S"))
+        embeddings = OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY"))
         try:
             vectorstore = FAISS.from_documents(docs, embeddings)
             print("[DEBUG] Vector store created successfully.")
@@ -1784,7 +1784,7 @@ def create_vectorstore_for_pdf(pdf_file):
     try:
         embeddings_model = OpenAIEmbeddings(
             model="text-embedding-3-large",
-            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+            openai_api_key=os.environ.get("OPENAI_API_KEY")
         )
         vs = FAISS.from_documents(chunks, embeddings_model)
 
@@ -2252,7 +2252,7 @@ def is_educational_query_openai(query: str, user_id: str, db: Session) -> bool:
 
 embedding_model = OpenAIEmbeddings(
     model="text-embedding-3-large",
-    api_key=os.getenv("OPENAI_API_KEY_S")
+    api_key=os.getenv("OPENAI_API_KEY")
 )
 
 def search_top_k(query_text: str, top_k: int = 5, class_filter: list = None):
@@ -2506,14 +2506,26 @@ async def search_pdfs(
         if matches_class(pdf_path, class_names_list):
             pdf_files.append(pdf)
         #here
+    #-------- commenting out code for conversation context-------
+    # context_gist = get_context_gist(user_id)
+    # is_first_query = len(user_contexts[user_id]) == 0
+    # ----------------------------
+    # CONTEXT MODE DISABLED
+    # ----------------------------
+    #context_gist = ""
+    # -------------------------------------------------
+    # CONTEXT MODE DISABLED
+    # -------------------------------------------------
+    use_gpt_only = False
+    is_first_query = False
 
-    context_gist = get_context_gist(user_id)
-    is_first_query = len(user_contexts[user_id]) == 0
-
-    # ------------------ Step 2: Classify query ------------------
-    query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
-    if is_first_query:
-        query_type = "pdf_only"
+      # -------------------------------------------------
+    # CONTEXT MODE DISABLED
+    # Query classification temporarily bypassed
+    # -------------------------------------------------
+    # query_type = classify_query_type(query, context_gist, user_id, pdf_files, db=db)
+    # if is_first_query:
+    #     query_type = "pdf_only"
 
     # -------------------------------------------------
     # TEMPORARILY DISABLE CONTEXT-ONLY MODE
@@ -2570,7 +2582,7 @@ async def search_pdfs(
             # Step 1a: Convert query to embedding
             query_embedding = OpenAIEmbeddings(
                 model="text-embedding-3-large",
-                openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+                openai_api_key=os.environ.get("OPENAI_API_KEY")
             ).embed_query(query)
         
             query_vector = np.array([query_embedding], dtype='float32')
@@ -2599,7 +2611,7 @@ async def search_pdfs(
 
      
         if not top_chunks:
-            use_context_only = True
+            use_gpt_only = True
 
         
 
@@ -2631,23 +2643,39 @@ async def search_pdfs(
     )
 
 
-    if use_context_only or not top_chunks:
+    #if use_context_only or not top_chunks:
+     #   gpt_prompt = f"""
+#You are an assistant. Follow the instructions below carefully.
+
+#Style: {reasoning_instruction}
+
+#Use only the previous conversation context to answer:
+#{context_gist}
+
+#Question:
+#{query}
+
+#Guidelines:
+#- Do not use any external knowledge beyond the conversation.
+#- If the user asks for a resource mentioned but not provided, say you do not have access.
+##- Prepend "[GPT answer]" if relying on your own understanding.
+#"""
+    if use_gpt_only or not top_chunks:
         gpt_prompt = f"""
-You are an assistant. Follow the instructions below carefully.
+    You are an educational assistant.
 
-Style: {reasoning_instruction}
+    Style:
+    {reasoning_instruction}
 
-Use only the previous conversation context to answer:
-{context_gist}
+    Question:
+    {query}
 
-Question:
-{query}
-
-Guidelines:
-- Do not use any external knowledge beyond the conversation.
-- If the user asks for a resource mentioned but not provided, say you do not have access.
-- Prepend "[GPT answer]" if relying on your own understanding.
-"""
+    Instructions:
+    - Answer using your own knowledge.
+    - Do not mention previous conversation.
+    - If you are unsure, say so.
+    - Prepend "[GPT answer]".
+    """
     else:
         row = db.execute(select(FranchiseLocation)).scalar_one_or_none()
         if row:
@@ -2662,8 +2690,6 @@ You are an assistant for {class_name} in {country} {state} . Follow the instruct
 
 Style: {reasoning_instruction}
 
-Previous conversation context:
-{context_gist}
 
 PDF Chunks:
 {context_texts_str}
@@ -2714,8 +2740,8 @@ Guidelines:
     })
 
     # ------------------ Step 10: Update user context ------------------
-    append_to_user_context(user_id, "user", query)
-    append_to_user_context(user_id, "assistant", answer_text)
+    #append_to_user_context(user_id, "user", query)
+    #append_to_user_context(user_id, "assistant", answer_text)
 
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse(results)
@@ -3295,7 +3321,7 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
         # Initialize embeddings model
         embeddings_model = OpenAIEmbeddings(
             model="text-embedding-3-large",
-            openai_api_key=os.environ.get("OPENAI_API_KEY_S")
+            openai_api_key=os.environ.get("OPENAI_API_KEY")
         )
 
         # Step 1: Process vector stores
