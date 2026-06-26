@@ -817,24 +817,25 @@ def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Generated OTP {otp} for email {email}")
 
     # --- Store OTP keyed by email with 5 min expiry ---
-    otp_store[email] = {"otp": otp, "expiry": time.time() + 300}
+    otp_store[email] = {
+        "otp": otp,
+        "expiry": time.time() + 300
+    }
     print(f"[DEBUG] Stored OTP for {email} with 5 min expiry")
 
-   # --- Send OTP via email ---
-# TEMPORARILY DISABLED FOR LOCAL TESTING
-#
-# try:
-#     print(f"[DEBUG] Attempting to send OTP to {email} via email")
-#     send_otp_email(email, otp)
-#     print(f"[INFO] Successfully sent OTP to {email}")
-# except Exception as e:
-#     print(f"[ERROR] Error sending OTP to {email}: {e}")
-#     raise HTTPException(status_code=500, detail=f"Error sending email: {e}")
-
-    print(f"[DEBUG] Email sending skipped. OTP for {email} is: {otp}")
+    # --- Send OTP via email ---
+    try:
+        print(f"[DEBUG] Attempting to send OTP to {email} via email")
+        send_otp_email(email, otp)
+        print(f"[INFO] Successfully sent OTP to {email}")
+    except Exception as e:
+        print(f"[ERROR] Error sending OTP to {email}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error sending email: {str(e)}"
+        )
 
     return {"message": "OTP sent successfully"}
-
 """
 # not consistent with the new otp via email
 @app.post("/verify-otp")
