@@ -129,7 +129,7 @@ app.add_middleware(
         "https://gamified-quiz-peach.vercel.app",
         "https://krish-chat-bot-new.vercel.app",
         "https://chatbot.gemkidsacademy.com.au",
-        "http://localhost:3000",
+        
     ],
     allow_credentials=True,
     allow_methods=["*"],  # or ["GET", "POST", "OPTIONS"]
