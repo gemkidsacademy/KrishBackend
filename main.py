@@ -126,6 +126,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://krish-chat-bot.vercel.app",
+        "https://gamified-quiz-peach.vercel.app",
         "https://krish-chat-bot-new.vercel.app",
         "https://chatbot.gemkidsacademy.com.au",
         "http://localhost:3000",
