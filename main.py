@@ -779,10 +779,89 @@ def send_otp_email(to_email: str, otp: str):
     print("[DEBUG] KEY PREFIX:", SENDGRID_API_KEY[:15] + "...")
 
     message = Mail(
-        from_email='noreply@gemkidsacademy.com.au',
+        from_email="noreply@gemkidsacademy.com.au",
         to_emails=to_email,
-        subject='Your OTP Code',
-        html_content=f'<p>Your OTP code is <strong>{otp}</strong>. It will expire in 5 minutes.</p>',
+        subject="Your OTP Code",
+        html_content=f"""
+        <div style="
+            max-width:600px;
+            margin:0 auto;
+            padding:40px 30px;
+            font-family:Arial, Helvetica, sans-serif;
+            color:#333333;
+            background:#ffffff;
+        ">
+
+            <!-- Logo -->
+            <div style="text-align:center; margin-bottom:30px;">
+                <img
+                    src="https://gemkidsacademy.com.au/wp-content/uploads/2024/10/cropped-logo-4-1.png"
+                    alt="Gem Kids Academy"
+                    style="width:180px;"
+                />
+            </div>
+
+            <!-- Heading -->
+            <h2 style="
+                text-align:center;
+                color:#2c3e50;
+                margin-bottom:25px;
+            ">
+                OTP Code
+            </h2>
+
+            <p style="font-size:16px; line-height:1.6;">
+                Your OTP code is below. Enter it in your open browser window to
+                finish signing in.
+            </p>
+
+            <!-- OTP -->
+            <div style="text-align:center; margin:35px 0;">
+                <div style="
+                    display:inline-block;
+                    padding:18px 40px;
+                    background:#f7f7f7;
+                    border:2px solid rgb(0,140,200);
+                    border-radius:10px;
+                    font-size:34px;
+                    font-weight:bold;
+                    letter-spacing:8px;
+                    color:rgb(219,71,45);
+                ">
+                    {otp}
+                </div>
+            </div>
+
+            <p style="font-size:15px;">
+                This code will expire in <strong>5 minutes</strong>.
+            </p>
+
+            <p style="font-size:15px; line-height:1.6;">
+                If you didn't request this email, there's nothing to worry about—you
+                can safely ignore it.
+            </p>
+
+            <p style="font-size:15px; line-height:1.6;">
+                If you have any questions, please contact your Centre Manager or the
+                <strong>Gem Kids Academy Support Team</strong>.
+            </p>
+
+            <hr style="
+                margin:35px 0 20px 0;
+                border:none;
+                border-top:1px solid #e5e5e5;
+            ">
+
+            <p style="
+                text-align:center;
+                font-size:12px;
+                color:#777777;
+            ">
+                © Gem Kids Academy
+            </p>
+
+        </div>
+        """,
     )
 
     message.reply_to = Email('do-not-reply@gemkidsacademy.com.au')
