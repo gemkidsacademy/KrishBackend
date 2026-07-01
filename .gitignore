@@ -35,4 +35,4 @@ Thumbs.db
 .pytest_cache/
 
 # mypy
-.mypy_cache/
+.mypy_cache/*.dump 

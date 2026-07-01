@@ -129,7 +129,7 @@ app.add_middleware(
         "https://gamified-quiz-peach.vercel.app",
         "https://krish-chat-bot-new.vercel.app",
         "https://chatbot.gemkidsacademy.com.au",
-        
+        "http://localhost:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],  # or ["GET", "POST", "OPTIONS"]
@@ -201,6 +201,89 @@ all_pdfs = []
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    username = Column(String, unique=True, nullable=False)
+
+    password = Column(String, nullable=False)
+
+    full_name = Column(String, nullable=False)
+
+    role = Column(String, nullable=False)
+
+    center_code = Column(String, nullable=True)
+
+    email = Column(String, nullable=True)
+
+    phone_number = Column(String, nullable=True)
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )
+
+class Student(Base):
+
+    __tablename__ = "students"
+
+    id = Column(String, primary_key=True, index=True)
+
+    # External student ID
+    student_id = Column(
+        String,
+        unique=True,
+        nullable=False
+    )
+
+    gender = Column(
+        String,
+        nullable=True
+    )
+
+    password = Column(
+        String,
+        nullable=False
+    )
+
+    name = Column(
+        String,
+        nullable=False
+    )
+
+    parent_email = Column(
+        String,
+        nullable=False
+    )
+
+    class_name = Column(
+        String,
+        nullable=False
+    )
+
+    class_day = Column(
+        String,
+        nullable=True
+    )
+
+    # NAPLAN year
+    student_year = Column(
+        String,
+        nullable=False
+    )
+
+    # NEW
+    center_code = Column(
+        String,
+        nullable=False
+    )
+    center_name = Column(
+        String,
+        nullable=False
+    )
+
 
 class KnowledgeBaseResponse(BaseModel):
     knowledge_base: Optional[str] = None
@@ -210,6 +293,9 @@ class CurrentTerm(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     term_name = Column(String(50), nullable=False)
+
+class ChatbotCurrentTermRequest(BaseModel):
+    term_name: str
  
 class OpenAIUsageLog(Base):
     __tablename__ = "openai_usage_log"
@@ -355,6 +441,9 @@ class LoginRequest(BaseModel):
     name: str
     password: str
 
+class LoginRequestChatbot(BaseModel):
+    student_id: str
+    password: str
 
 Base.metadata.create_all(bind=engine)
 
@@ -452,7 +541,54 @@ def calculate_openai_cost(model_name: str, prompt_tokens: int, completion_tokens
 # API Endpoints
 
 # -----------------------------
+@app.get("/chatbot-current-term")
+def get_chatbot_current_term(
+    db: Session = Depends(get_db)
+):
 
+    current_term = db.query(CurrentTerm).first()
+
+    if not current_term:
+        raise HTTPException(
+            status_code=404,
+            detail="Current chatbot term not configured."
+        )
+
+    return {
+        "id": current_term.id,
+        "term_name": current_term.term_name,
+    }
+
+@app.put("/chatbot-current-term")
+def update_chatbot_current_term(
+    data: ChatbotCurrentTermRequest,
+    db: Session = Depends(get_db)
+):
+
+    current_term = db.query(CurrentTerm).first()
+
+    if not current_term:
+
+        current_term = CurrentTerm(
+            term_name=data.term_name
+        )
+
+        db.add(current_term)
+
+    else:
+
+        current_term.term_name = data.term_name
+
+    db.commit()
+    db.refresh(current_term)
+
+    return {
+        "message": "Chatbot current term updated successfully.",
+        "term": {
+            "id": current_term.id,
+            "term_name": current_term.term_name,
+        }
+    }
 
 @app.options("/{path:path}")  # 👈 handles all OPTIONS requests
 async def preflight_handler(path: str):
@@ -669,15 +805,13 @@ def get_user(
         student_id=user.student_id   # <-- NEW FIELD
     )
               
-@app.get("/user_ids")
+@app.get("/user_ids", response_model=List[UserListItem])
 def get_user_ids(db: Session = Depends(get_db)):
     """
-    Returns all user IDs as a list of objects:
-    [{ "id": 1 }, { "id": 2 }, ...]
+    Returns all users for the dropdown.
     """
-    users = db.query(User.id).all()  # returns list of tuples like [(1,), (2,), ...]
-    user_ids = [{"id": u[0]} for u in users]  # convert to list of dicts
-    return user_ids
+    users = db.query(User).all()
+    return users
 
 @app.delete("/delete-user/{user_id}")
 def delete_user(
@@ -877,6 +1011,87 @@ def send_otp_email(to_email: str, otp: str):
 
 #sending otp using send grid 
 @app.post("/send-otp")
+def send_otp_endpoint(
+    data: SendOTPRequest,
+    db: Session = Depends(get_db)
+):
+    email = data.email.strip().lower()
+    print(f"[DEBUG] Received OTP request for email: {email}")
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required"
+        )
+
+    # --------------------------------------------------
+    # Check Admin Users first
+    # --------------------------------------------------
+    admin = (
+        db.query(AdminUser)
+        .filter(AdminUser.email == email)
+        .first()
+    )
+
+    # --------------------------------------------------
+    # If not found, check Students (Parent Email)
+    # --------------------------------------------------
+    student = None
+
+    if not admin:
+        student = (
+            db.query(Student)
+            .filter(Student.parent_email == email)
+            .first()
+        )
+
+        if not student:
+            print(f"[WARNING] Email {email} not found in AdminUser or Student tables")
+            raise HTTPException(
+                status_code=404,
+                detail="Email not found"
+            )
+
+        print(f"[DEBUG] Found student '{student.name}' with parent email {email}")
+
+    else:
+        print(f"[DEBUG] Found admin '{admin.full_name}' with email {email}")
+
+    # --------------------------------------------------
+    # Generate OTP
+    # --------------------------------------------------
+    otp = generate_otp()
+    print(f"[DEBUG] Generated OTP {otp} for email {email}")
+
+    # --------------------------------------------------
+    # Store OTP for 5 minutes
+    # --------------------------------------------------
+    otp_store[email] = {
+        "otp": otp,
+        "expiry": time.time() + 300
+    }
+
+    print(f"[DEBUG] Stored OTP for {email} with 5 minute expiry")
+
+    # --------------------------------------------------
+    # Send OTP Email
+    # --------------------------------------------------
+    try:
+        print(f"[DEBUG] Sending OTP to {email}")
+        send_otp_email(email, otp)
+        print(f"[INFO] OTP successfully sent to {email}")
+
+    except Exception as e:
+        print(f"[ERROR] Failed to send OTP to {email}: {e}")
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error sending email: {str(e)}"
+        )
+
+    return {
+        "message": "OTP sent successfully"
+    }
 def send_otp_endpoint(data: SendOTPRequest, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
     print(f"[DEBUG] Received OTP request for email: {email}")
@@ -1004,61 +1219,234 @@ class VerifyOTPRequest(BaseModel):
     otp: str
 
 @app.post("/verify-otp")
-def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
+def verify_otp(
+    data: VerifyOTPRequest,
+    db: Session = Depends(get_db)
+):
     email = data.email.strip().lower()
     print(f"[DEBUG] Received OTP verification request for email: {email}")
 
-    # --- Fetch user by email ---
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        print(f"[WARNING] User with email {email} not found")
-        raise HTTPException(status_code=404, detail="User not found")
+    # --------------------------------------------------
+    # Check AdminUser first
+    # --------------------------------------------------
+    admin = (
+        db.query(AdminUser)
+        .filter(AdminUser.email == email)
+        .first()
+    )
 
-    # --- Retrieve OTP record ---
+    student = None
+
+    # --------------------------------------------------
+    # If not an admin, check Student table
+    # --------------------------------------------------
+    if not admin:
+        student = (
+            db.query(Student)
+            .filter(Student.parent_email == email)
+            .first()
+        )
+
+        if not student:
+            print(f"[WARNING] Email {email} not found in AdminUser or Student tables")
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+
+    # --------------------------------------------------
+    # Retrieve OTP record
+    # --------------------------------------------------
     record = otp_store.get(email)
+
     if not record:
         print(f"[WARNING] No OTP record found for {email}")
-        raise HTTPException(status_code=400, detail="OTP not sent")
+        raise HTTPException(
+            status_code=400,
+            detail="OTP not sent"
+        )
 
     if time.time() > record["expiry"]:
         print(f"[WARNING] OTP for {email} has expired")
         otp_store.pop(email, None)
-        raise HTTPException(status_code=400, detail="OTP expired")
+
+        raise HTTPException(
+            status_code=400,
+            detail="OTP expired"
+        )
 
     if str(data.otp) != str(record["otp"]):
-        print(f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP ({record['otp']})")
-        raise HTTPException(status_code=400, detail="Invalid OTP")
+        print(
+            f"[WARNING] Entered OTP ({data.otp}) does not match stored OTP ({record['otp']})"
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OTP"
+        )
 
     print(f"[INFO] OTP for {email} is valid")
-    otp_store.pop(email, None)  # Clear OTP after verification
 
-    # --- Clear previous user state if applicable ---
-    if user.name in user_contexts:
-        user_contexts[user.name] = []
-        print(f"[DEBUG] Cleared previous context for user {user.name}")
+    # Remove OTP after successful verification
+    otp_store.pop(email, None)
 
-    user_vectorstores_initialized[user.name] = False
-    print(f"[DEBUG] vectorstores_initialized for user {user.name} set to False")
+    # --------------------------------------------------
+    # Admin Login
+    # --------------------------------------------------
+    if admin:
 
-    # Remove existing session if using session management
-    existing_session = db.query(SessionModel).filter(SessionModel.user_id == user.id).first()
-    if existing_session:
-        db.delete(existing_session)
-        db.commit()
-        print(f"[DEBUG] Cleared existing session for user {user.id}")
+        print(f"[INFO] Admin '{admin.full_name}' authenticated")
 
-    # --- Prepare response including class_name ---
-    user_info = {
-        "id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "class_name": user.class_name,
+        if admin.full_name in user_contexts:
+            user_contexts[admin.full_name] = []
+            print(f"[DEBUG] Cleared previous context for admin {admin.full_name}")
+
+        user_vectorstores_initialized[admin.full_name] = False
+
+        admin_info = {
+            "id": admin.id,
+            "name": admin.full_name,
+            "username": admin.username,
+            "email": admin.email,
+            "role": admin.role,
+            "center_code": admin.center_code,
+        }
+
+        return {
+            "message": "OTP verified successfully",
+            "user": admin_info,
+        }
+
+    # --------------------------------------------------
+    # Student Login
+    # --------------------------------------------------
+    print(f"[INFO] Student '{student.name}' authenticated")
+
+    if student.name in user_contexts:
+        user_contexts[student.name] = []
+        print(f"[DEBUG] Cleared previous context for student {student.name}")
+
+    user_vectorstores_initialized[student.name] = False
+
+    student_info = {
+        "id": student.id,
+        "student_id": student.student_id,
+        "name": student.name,
+        "email": student.parent_email,
+        "class_name": student.class_name,
+        "class_day": student.class_day,
+        "student_year": student.student_year,
+        "center_code": student.center_code,
+        "center_name": student.center_name,
     }
 
-    print(f"[INFO] OTP verification complete for user {user.name}")
-    return {"message": "OTP verified successfully", "user": user_info}
+    return {
+        "message": "OTP verified successfully",
+        "user": student_info,
+    }
+@app.post("/login-GemKidsAcademyChatbot")
+def login(
+    data: LoginRequestChatbot,
+    db: Session = Depends(get_db)
+):
+    student_id = data.student_id.strip()
+    password = data.password.strip()
 
+    print(f"[DEBUG] Login request received for ID: {student_id}")
 
+    if not student_id or not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Student ID and password are required"
+        )
+
+    # --------------------------------------------------
+    # Check Admin Users first
+    # --------------------------------------------------
+    admin = (
+        db.query(AdminUser)
+        .filter(AdminUser.username == student_id)
+        .first()
+    )
+
+    if admin:
+
+        if admin.password != password:
+            print(f"[WARNING] Invalid password for admin {student_id}")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid ID or password"
+            )
+
+        print(f"[INFO] Admin '{admin.full_name}' logged in")
+
+        if admin.full_name in user_contexts:
+            user_contexts[admin.full_name] = []
+
+        user_vectorstores_initialized[admin.full_name] = False
+
+        admin_info = {
+            "id": admin.id,
+            "name": admin.full_name,
+            "username": admin.username,
+            "role": admin.role,
+            "email": admin.email,
+            "center_code": admin.center_code,
+        }
+
+        return {
+            "message": "Login successful",
+            "user": admin_info,
+        }
+
+    # --------------------------------------------------
+    # Check Students
+    # --------------------------------------------------
+    student = (
+        db.query(Student)
+        .filter(Student.student_id == student_id)
+        .first()
+    )
+
+    if not student:
+        print(f"[WARNING] Student ID '{student_id}' not found")
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid ID or password"
+        )
+
+    if student.password != password:
+        print(f"[WARNING] Invalid password for student {student_id}")
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid ID or password"
+        )
+
+    print(f"[INFO] Student '{student.name}' logged in")
+
+    if student.name in user_contexts:
+        user_contexts[student.name] = []
+
+    user_vectorstores_initialized[student.name] = False
+
+    student_info = {
+        "id": student.id,
+        "student_id": student.student_id,
+        "name": student.name,
+        "email": student.parent_email,
+        "class_name": student.class_name,
+        "class_day": student.class_day,
+        "student_year": student.student_year,
+        "center_code": student.center_code,
+        "center_name": student.center_name,
+    }
+
+    return {
+        "message": "Login successful",
+        "user": student_info,
+    }
 
 @app.post("/login")
 async def login(
