@@ -11,11 +11,20 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email 
 
 from pgvector.sqlalchemy import Vector
+from fastapi.responses import HTMLResponse
 
-
+import fitz  # PyMuPDF
+import base64
+from fastapi.responses import HTMLResponse  
+from urllib.parse import urlencode
 
 
 import numpy as np
+#for protected pdf viewer for Gem Chatbot
+PDF_CACHE = {}
+PDF_CACHE_TTL_SECONDS = 60 * 10   # 10 minutes
+ALLOWED_PDFS_CACHE = {}
+ALLOWED_PDFS_CACHE_TTL_SECONDS = 60 * 5  
 
 
 
@@ -99,6 +108,11 @@ MODEL_COST = {
     "text-embedding-3-small": {"input": 0.0004, "output": 0},
 }
 
+#for backend url so we can send proper backend pdf urls to chatbot users
+BACKEND_PUBLIC_BASE_URL = os.getenv(
+    "BACKEND_PUBLIC_BASE_URL",
+    "http://127.0.0.1:8000"
+)
 # -----------------------------
 # App & CORS
 # -----------------------------
@@ -158,6 +172,89 @@ drive_service = build("drive", "v3", credentials=creds)
 #DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
 DEMO_FOLDER_ID = "1EweJn82tRvVD5DlHwdPKzc_uppXU5LKH"
 
+def log_drive_folder_hierarchy(root_folder_id: str):
+    """
+    Logs Google Drive folder hierarchy in the format:
+    Root
+      └── Class
+            └── Year
+                  └── Term
+    """
+
+    print("\n================ DRIVE FOLDER HIERARCHY ================\n")
+
+    def get_subfolders(parent_id: str):
+        try:
+            response = drive_service.files().list(
+                q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                spaces="drive",
+                fields="files(id, name)",
+                orderBy="name"
+            ).execute()
+            return response.get("files", [])
+        except HttpError as e:
+            print(f"ERROR fetching subfolders for parent {parent_id}: {e}")
+            return []
+
+    try:
+        # Root folder metadata
+        root_meta = drive_service.files().get(
+            fileId=root_folder_id,
+            fields="id,name"
+        ).execute()
+
+        print(f"ROOT: {root_meta.get('name')} ({root_meta.get('id')})\n")
+
+        # Level 1: Class folders
+        class_folders = get_subfolders(root_folder_id)
+
+        if not class_folders:
+            print("No class folders found under root.")
+            return
+
+        for class_folder in class_folders:
+            class_name = class_folder["name"]
+            class_id = class_folder["id"]
+
+            print(f"├── CLASS: {class_name} ({class_id})")
+
+            # Level 2: Year folders under class
+            year_folders = get_subfolders(class_id)
+
+            if not year_folders:
+                print("│   └── No year folders found")
+                continue
+
+            for year_folder in year_folders:
+                year_name = year_folder["name"]
+                year_id = year_folder["id"]
+
+                print(f"│   ├── YEAR: {year_name} ({year_id})")
+
+                # Level 3: Term folders under year
+                term_folders = get_subfolders(year_id)
+
+                if not term_folders:
+                    print("│   │   └── No term folders found")
+                    continue
+
+                for term_folder in term_folders:
+                    term_name = term_folder["name"]
+                    term_id = term_folder["id"]
+
+                    print(f"│   │   ├── TERM: {term_name} ({term_id})")
+
+        print("\n================ END OF DRIVE HIERARCHY ================\n")
+
+    except HttpError as e:
+        print("ERROR while reading Drive hierarchy")
+        print(str(e))
+
+
+print("==== Starting Drive access process ====")
+
+log_drive_folder_hierarchy(DEMO_FOLDER_ID)
+
 
 
 
@@ -200,6 +297,7 @@ pdf_listing_done = False
 all_pdfs = []
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
+
 
 class AdminUser(Base):
     __tablename__ = "admin_users"
@@ -1678,6 +1776,87 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
 
     print("==== Drive access process completed ====")
 """
+
+from googleapiclient.errors import HttpError
+
+def log_drive_folder_hierarchy(root_folder_id: str):
+    """
+    Logs Google Drive folder hierarchy in the format:
+    Root
+      └── Class
+            └── Year
+                  └── Term
+    """
+
+    print("\n================ DRIVE FOLDER HIERARCHY ================\n")
+
+    def get_subfolders(parent_id: str):
+        try:
+            response = drive_service.files().list(
+                q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                spaces="drive",
+                fields="files(id, name)",
+                orderBy="name"
+            ).execute()
+            return response.get("files", [])
+        except HttpError as e:
+            print(f"ERROR fetching subfolders for parent {parent_id}: {e}")
+            return []
+
+    try:
+        # Root folder metadata
+        root_meta = drive_service.files().get(
+            fileId=root_folder_id,
+            fields="id,name"
+        ).execute()
+
+        print(f"ROOT: {root_meta.get('name')} ({root_meta.get('id')})\n")
+
+        # Level 1: Class folders
+        class_folders = get_subfolders(root_folder_id)
+
+        if not class_folders:
+            print("No class folders found under root.")
+            return
+
+        for class_folder in class_folders:
+            class_name = class_folder["name"]
+            class_id = class_folder["id"]
+
+            print(f"├── CLASS: {class_name} ({class_id})")
+
+            # Level 2: Year folders under class
+            year_folders = get_subfolders(class_id)
+
+            if not year_folders:
+                print("│   └── No year folders found")
+                continue
+
+            for year_folder in year_folders:
+                year_name = year_folder["name"]
+                year_id = year_folder["id"]
+
+                print(f"│   ├── YEAR: {year_name} ({year_id})")
+
+                # Level 3: Term folders under year
+                term_folders = get_subfolders(year_id)
+
+                if not term_folders:
+                    print("│   │   └── No term folders found")
+                    continue
+
+                for term_folder in term_folders:
+                    term_name = term_folder["name"]
+                    term_id = term_folder["id"]
+
+                    print(f"│   │   ├── TERM: {term_name} ({term_id})")
+
+        print("\n================ END OF DRIVE HIERARCHY ================\n")
+
+    except HttpError as e:
+        print("ERROR while reading Drive hierarchy")
+        print(str(e))
+
 def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
     """
     Grants Google Drive access to a specific Year/Term folder:
@@ -1704,17 +1883,31 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
 
     print(f"DEBUG: Emails to process: {email_list}")
 
+
     # -------------------------
-    # Fetch users
+    # Fetch students using parent_email
     # -------------------------
-    users = db.query(User).filter(User.email.in_(email_list)).all()
-    if not users:
-        print("No matching users found in DB. Exiting.")
+    students = db.query(Student).filter(Student.parent_email.in_(email_list)).all()
+
+    if not students:
+        print("No matching students found in DB. Exiting.")
         return
 
-    missing = set(email_list) - {u.email for u in users}
+    found_parent_emails = {s.parent_email.strip().lower() for s in students if s.parent_email}
+    missing = {email.strip().lower() for email in email_list} - found_parent_emails
+
     if missing:
-        print(f"WARNING: Emails not found in DB: {missing}")
+        print(f"WARNING: Parent emails not found in DB: {missing}")
+
+    print("DEBUG: Students fetched from DB:")
+    for s in students:
+        print(
+            f"    student_id={s.student_id}, "
+            f"name={s.name}, "
+            f"parent_email={s.parent_email}, "
+            f"class_name={s.class_name}, "
+            f"student_year={s.student_year}"
+        )
 
     # -------------------------
     # Load current term from DB
@@ -1743,70 +1936,108 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
             return []
 
     # -------------------------
-    # 1. Fetch Year folders under root
+    # 1. Fetch Class folders under root
     # -------------------------
-    year_folders = get_subfolders(file_id)
-    print(f"DEBUG: Found Year folders: {[f['name'] for f in year_folders]}")
+    class_folders = get_subfolders(file_id)
+    print(f"DEBUG: Found Class folders: {[f['name'] for f in class_folders]}")
 
     # -------------------------
-    # 2. Build Year → Term → folderId map
+    # 2. Build Class → Year → Term → folderId map
     # -------------------------
     folder_map = {}
 
-    for year in year_folders:
-        year_name = year["name"].strip().lower()
-        year_id = year["id"]
+    for class_folder in class_folders:
+        class_name = class_folder["name"].strip().lower()
+        class_id = class_folder["id"]
 
-        term_folders = get_subfolders(year_id)
+        year_folders = get_subfolders(class_id)
 
-        folder_map[year_name] = {
-            term["name"].strip().lower(): term["id"]
-            for term in term_folders
-        }
+        folder_map[class_name] = {}
 
-    print("DEBUG: Folder map:", folder_map)
+        for year_folder in year_folders:
+            year_name = year_folder["name"].strip().lower()
+            year_id = year_folder["id"]
+
+            term_folders = get_subfolders(year_id)
+
+            folder_map[class_name][year_name] = {
+                term["name"].strip().lower(): term["id"]
+                for term in term_folders
+            }
+
+    print("DEBUG: Folder map:")
+    for class_name, years in folder_map.items():
+        print(f"  CLASS: {class_name}")
+        for year_name, terms in years.items():
+            print(f"    YEAR: {year_name}")
+            print(f"      TERMS: {list(terms.keys())}")
 
     # -------------------------
     # 3. Grant access
     # -------------------------
-    for user in users:
+    for student in students:
 
-        if not user.class_name:
-            print(f"Skipping {user.email}: class_name is empty.")
+        if not student.class_name:
+            print(f"Skipping {student.parent_email}: class_name is empty.")
             continue
 
-        # user may have multiple classes: "Year 1, Year 2"
-        print(f"DEBUG: Raw class_name from DB = '{user.class_name}'")
-        user_years = [c.strip().lower() for c in user.class_name.split(",")]
+        print(f"DEBUG: Raw class_name from DB = '{student.class_name}'")
+        print(f"DEBUG: Raw student_year from DB = '{student.student_year}'")
 
-        print(f"DEBUG: Processing {user.email} for classes {user_years}")
+        student_classes = [c.strip().lower() for c in student.class_name.split(",") if c.strip()]
+        student_year = student.student_year.strip().lower() if student.student_year else ""
 
-        for year_key in user_years:
+        print(
+            f"DEBUG: Processing student_id={student.student_id}, "
+            f"parent_email={student.parent_email}, "
+            f"class_name={student_classes}, "
+            f"student_year={student_year}"
+        )
 
-            # Check Year folder exists
-            if year_key not in folder_map:
+        if not student_year:
+            print(f"Skipping {student.parent_email}: student_year is empty.")
+            continue
+
+        for class_key in student_classes:
+
+            # Check Class folder exists
+            if class_key not in folder_map:
                 print(
-                    f"WARNING: Year folder '{year_key}' not found in Drive. "
-                    f"Available folders: {list(folder_map.keys())}"
+                    f"WARNING: Class folder '{class_key}' not found in Drive. "
+                    f"Available class folders: {list(folder_map.keys())}"
                 )
                 continue
 
-            # Check Term folder exists
-            if current_term not in folder_map[year_key]:
-                print(f"WARNING: Term '{current_term}' not found under Year '{year_key}'.")
+            # Check Year folder exists under class
+            if student_year not in folder_map[class_key]:
+                print(
+                    f"WARNING: Year folder '{student_year}' not found under Class '{class_key}'. "
+                    f"Available years: {list(folder_map[class_key].keys())}"
+                )
+                continue
+
+            # Check Term folder exists under class/year
+            if current_term not in folder_map[class_key][student_year]:
+                print(
+                    f"WARNING: Term '{current_term}' not found under "
+                    f"Class '{class_key}' → Year '{student_year}'."
+                )
                 continue
 
             # Final target folder
-            folder_id_to_share = folder_map[year_key][current_term]
+            folder_id_to_share = folder_map[class_key][student_year][current_term]
+
+            print(f"DRIVE URL: https://drive.google.com/drive/folders/{folder_id_to_share}")
             print(
-                f"DRIVE URL: https://drive.google.com/drive/folders/{folder_id_to_share}"
+                f"DEBUG: Sharing Class='{class_key}', Year='{student_year}', "
+                f"Term='{current_term}' (ID={folder_id_to_share}) "
+                f"with parent {student.parent_email}"
             )
-            print(f"DEBUG: Sharing Year='{year_key}', Term='{current_term}' (ID={folder_id_to_share}) with {user.email}")
 
             try:
                 print("--------------------------------------------------")
                 print(f"Creating permission...")
-                print(f"Email      : {user.email}")
+                print(f"Parent Email : {student.parent_email}")
                 print(f"Folder ID  : {folder_id_to_share}")
                 print(f"Role       : {role}")
                 print("--------------------------------------------------")
@@ -1823,7 +2054,7 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                     body={
                         "type": "user",
                         "role": role,
-                        "emailAddress": user.email
+                        "emailAddress": student.parent_email
                     },
                     fields="id",
                     sendNotificationEmail=False
@@ -1850,25 +2081,25 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
                         f"id={p.get('id')}"
                     )
 
-                    if p.get("emailAddress", "").lower() == user.email.lower():
+                    if p.get("emailAddress", "").lower() == student.parent_email.lower():
                         user_found = True
 
                 if user_found:
-                    print(f"VERIFIED: {user.email} exists in folder permissions")
+                    print(f"VERIFIED: {student.parent_email} exists in folder permissions")
                 else:
-                    print(f"WARNING: {user.email} NOT FOUND in folder permissions")
+                    print(f"WARNING: {student.parent_email} NOT FOUND in folder permissions")
 
                 print(
                     f"SUCCESS: Permission created. "
                     f"Permission ID={permission.get('id')}"
                 )
 
-                print(f"SUCCESS: Shared folder {folder_id_to_share} with {user.email}")
+                print(f"SUCCESS: Shared folder {folder_id_to_share} with {student.parent_email}")
 
             except HttpError as e:
 
                 print("========== GOOGLE DRIVE ERROR ==========")
-                print(f"User Email : {user.email}")
+                print(f"Parent Email : {student.parent_email}")
                 print(f"Folder ID  : {folder_id_to_share}")
 
                 try:
@@ -2566,27 +2797,69 @@ def get_vectorstore_from_cache(gcs_prefix: str, embeddings):
     return vectorstore  
 
 def is_pdf_request(
-    query: str, 
-    user_id: str, 
+    query: str,
+    user_id: str,
     db: Session
 ) -> bool:
     """
-    Determine whether the user wants PDF links.
-    Returns True if the model answers 'YES' or if query matches a term/week pattern.
-    Logs API usage if db session is provided.
+    Determine whether the user wants booklet/PDF links.
+    Returns True if:
+      1) query clearly looks like booklet/pdf request via regex/keywords, OR
+      2) model says YES
     """
-    query_lower = query.lower()
+    query_lower = query.lower().strip()
 
-    # -------------------- Pattern-based check --------------------
-    term_week_pattern = r"term\s*\d+\s*week\s*\d+"
-    if re.search(term_week_pattern, query_lower):
-        return True
+    # ---------------------------------------------------
+    # 1. Strong keyword-based shortcut
+    # ---------------------------------------------------
+    pdf_keywords = [
+        "pdf",
+        "pdfs",
+        "booklet",
+        "booklets",
+        "worksheet",
+        "worksheets",
+        "book",
+        "books",
+        "material",
+        "materials",
+        "notes",
+        "document",
+        "documents"
+    ]
 
-    # -------------------- OpenAI classifier --------------------
+    if any(word in query_lower for word in pdf_keywords):
+        # If they are also asking about term/year/week,
+        # treat it as a booklet/PDF fetch request.
+        if any(x in query_lower for x in ["term", "year", "week"]):
+            return True
+
+    # ---------------------------------------------------
+    # 2. Pattern-based checks
+    # ---------------------------------------------------
+    patterns = [
+        r"term\s*\d+\s*week\s*\d+",
+        r"term\s*\d+",
+        r"year\s*\d+"
+    ]
+
+    if any(re.search(pattern, query_lower) for pattern in patterns):
+        if any(word in query_lower for word in ["booklet", "booklets", "pdf", "pdfs", "worksheet", "worksheets"]):
+            return True
+
+    # ---------------------------------------------------
+    # 3. OpenAI classifier fallback
+    # ---------------------------------------------------
     prompt = (
         "You are a strict intent classifier.\n\n"
-        "Determine whether the following user query is asking to fetch PDF files or PDF links.\n"
-        "Respond only with YES or NO (without quotes).\n\n"
+        "Decide whether the user is asking to fetch or open booklet/PDF/document links "
+        "for study material.\n"
+        "Examples that should be YES:\n"
+        "- give me year 5 term 1 booklet\n"
+        "- fetch term 2 pdfs\n"
+        "- show me week 3 worksheet\n"
+        "- open the term 1 booklet\n\n"
+        "Respond only with YES or NO.\n\n"
         f"Query: {query}"
     )
 
@@ -2597,7 +2870,6 @@ def is_pdf_request(
             temperature=0
         )
 
-        # -------------------- Log usage --------------------
         if db is not None:
             try:
                 usage = response.usage
@@ -2625,9 +2897,7 @@ def is_pdf_request(
 
     except Exception as e:
         print(f"[ERROR] is_pdf_request failed: {e}")
-        # fallback: treat as not a PDF request
         return False
-
 
 
 
@@ -2908,6 +3178,774 @@ def reset_students_endpoint(db: Session = Depends(get_db)):
     print("==== Reset students process completed successfully ====")
     return response
 
+
+def get_cached_allowed_pdfs(student_id: str):
+    entry = ALLOWED_PDFS_CACHE.get(student_id)
+
+    if not entry:
+        return None
+
+    age = time.time() - entry["cached_at"]
+    if age > ALLOWED_PDFS_CACHE_TTL_SECONDS:
+        ALLOWED_PDFS_CACHE.pop(student_id, None)
+        return None
+
+    return entry["data"]
+
+
+def set_cached_allowed_pdfs(student_id: str, data: dict):
+    ALLOWED_PDFS_CACHE[student_id] = {
+        "data": data,
+        "cached_at": time.time()
+    }
+
+def get_allowed_pdfs_for_student(student_id: str, db: Session):
+    """
+    Returns the list of PDFs a student is allowed to access
+    based on:
+        Class -> Year -> Current Term
+
+    Returns:
+        {
+            "student_id": ...,
+            "class_name": ...,
+            "student_year": ...,
+            "current_term": ...,
+            "folder_id": ...,
+            "files": [
+                {"id": "...", "name": "...", "mimeType": "..."},
+                ...
+            ]
+        }
+    """
+
+    print("\n========== GET ALLOWED PDFS START ==========")
+    print(f"Requested student_id: {student_id}")
+
+    if db is None:
+        raise ValueError("A database session must be provided via `db` argument.")
+
+    # ------------------------------------------------
+    # 0. Check cache first
+    # ------------------------------------------------
+    cached_data = get_cached_allowed_pdfs(student_id)
+    if cached_data is not None:
+        print(f"[ALLOWED PDF CACHE HIT] student_id={student_id}")
+        print("========== GET ALLOWED PDFS END ==========\n")
+        return cached_data
+
+    print(f"[ALLOWED PDF CACHE MISS] student_id={student_id}")
+
+    # -------------------------
+    # 1. Fetch student
+    # -------------------------
+    student = (
+        db.query(Student)
+        .filter(Student.student_id == student_id)
+        .first()
+    )
+
+    if not student:
+        print(f"ERROR: No student found for student_id={student_id}")
+        print("========== GET ALLOWED PDFS END ==========\n")
+        return None
+
+    print("DEBUG: Student found:")
+    print(f"    student_id   = {student.student_id}")
+    print(f"    name         = {student.name}")
+    print(f"    parent_email = {student.parent_email}")
+    print(f"    class_name   = {student.class_name}")
+    print(f"    student_year = {student.student_year}")
+
+    if not student.class_name:
+        print("ERROR: Student class_name is empty.")
+        print("========== GET ALLOWED PDFS END ==========\n")
+        return None
+
+    if not student.student_year:
+        print("ERROR: Student student_year is empty.")
+        print("========== GET ALLOWED PDFS END ==========\n")
+        return None
+
+    # -------------------------
+    # 2. Load current term
+    # -------------------------
+    current_term_record = db.query(CurrentTerm).first()
+    if not current_term_record:
+        print("ERROR: No current term found in DB.")
+        print("========== GET ALLOWED PDFS END ==========\n")
+        return None
+
+    current_term = current_term_record.term_name.strip().lower()
+    print(f"DEBUG: Current term from DB = '{current_term}'")
+
+    # -------------------------
+    # 3. Normalize student values
+    # -------------------------
+    student_classes = [
+        c.strip().lower()
+        for c in student.class_name.split(",")
+        if c.strip()
+    ]
+    student_year = student.student_year.strip().lower()
+
+    print(f"DEBUG: Normalized student classes = {student_classes}")
+    print(f"DEBUG: Normalized student year    = {student_year}")
+
+    # -------------------------
+    # 4. Helper to fetch subfolders
+    # -------------------------
+    def get_subfolders(parent_id: str):
+        try:
+            response = drive_service.files().list(
+                q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                spaces="drive",
+                fields="files(id, name)"
+            ).execute()
+            return response.get("files", [])
+        except HttpError as e:
+            print(f"ERROR: Failed fetching subfolders for parent {parent_id}: {e}")
+            return []
+
+    # -------------------------
+    # 5. Build Class -> Year -> Term -> folderId map
+    # -------------------------
+    class_folders = get_subfolders(DEMO_FOLDER_ID)
+    print(f"DEBUG: Found Class folders: {[f['name'] for f in class_folders]}")
+
+    folder_map = {}
+
+    for class_folder in class_folders:
+        class_name = class_folder["name"].strip().lower()
+        class_id = class_folder["id"]
+
+        year_folders = get_subfolders(class_id)
+        folder_map[class_name] = {}
+
+        for year_folder in year_folders:
+            year_name = year_folder["name"].strip().lower()
+            year_id = year_folder["id"]
+
+            term_folders = get_subfolders(year_id)
+
+            folder_map[class_name][year_name] = {
+                term["name"].strip().lower(): term["id"]
+                for term in term_folders
+            }
+
+    print("DEBUG: Folder map:")
+    for class_name, years in folder_map.items():
+        print(f"  CLASS: {class_name}")
+        for year_name, terms in years.items():
+            print(f"    YEAR: {year_name}")
+            print(f"      TERMS: {list(terms.keys())}")
+
+    # -------------------------
+    # 6. Resolve allowed folder
+    # -------------------------
+    resolved_folder_id = None
+    resolved_class = None
+
+    for class_key in student_classes:
+        print(f"DEBUG: Checking class '{class_key}' for student...")
+
+        if class_key not in folder_map:
+            print(
+                f"WARNING: Class folder '{class_key}' not found in Drive. "
+                f"Available class folders: {list(folder_map.keys())}"
+            )
+            continue
+
+        if student_year not in folder_map[class_key]:
+            print(
+                f"WARNING: Year folder '{student_year}' not found under class '{class_key}'. "
+                f"Available years: {list(folder_map[class_key].keys())}"
+            )
+            continue
+
+        if current_term not in folder_map[class_key][student_year]:
+            print(
+                f"WARNING: Term '{current_term}' not found under "
+                f"class '{class_key}' -> year '{student_year}'."
+            )
+            continue
+
+        resolved_folder_id = folder_map[class_key][student_year][current_term]
+        resolved_class = class_key
+        break
+
+    if not resolved_folder_id:
+        print("ERROR: Could not resolve a valid folder for this student.")
+        print("========== GET ALLOWED PDFS END ==========\n")
+        return None
+
+    print("DEBUG: Resolved student folder:")
+    print(f"    class     = {resolved_class}")
+    print(f"    year      = {student_year}")
+    print(f"    term      = {current_term}")
+    print(f"    folder_id = {resolved_folder_id}")
+
+    # -------------------------
+    # 7. List PDFs inside resolved folder
+    # -------------------------
+    try:
+        response = drive_service.files().list(
+            q=(
+                f"'{resolved_folder_id}' in parents "
+                f"and mimeType='application/pdf' "
+                f"and trashed=false"
+            ),
+            spaces="drive",
+            fields="files(id, name, mimeType)"
+        ).execute()
+
+        pdf_files = response.get("files", [])
+
+    except HttpError as e:
+        print("ERROR: Failed to list PDFs inside resolved folder.")
+        print(str(e))
+        print("========== GET ALLOWED PDFS END ==========\n")
+        return None
+
+    print("DEBUG: PDFs found in allowed folder:")
+    if not pdf_files:
+        print("    No PDFs found.")
+    else:
+        for pdf in pdf_files:
+            print(
+                f"    file_name={pdf.get('name')}, "
+                f"file_id={pdf.get('id')}, "
+                f"mimeType={pdf.get('mimeType')}"
+            )
+
+    result = {
+        "student_id": student.student_id,
+        "class_name": student.class_name,
+        "student_year": student.student_year,
+        "current_term": current_term_record.term_name,
+        "folder_id": resolved_folder_id,
+        "files": pdf_files
+    }
+
+    # ------------------------------------------------
+    # 8. Save in cache before returning
+    # ------------------------------------------------
+    set_cached_allowed_pdfs(student_id, result)
+    print(f"[ALLOWED PDF CACHE STORE] student_id={student_id}")
+
+    print("========== GET ALLOWED PDFS END ==========\n")
+    return result
+@app.get("/debug/student-allowed-pdfs")
+def debug_student_allowed_pdfs(
+    student_id: str,
+    db: Session = Depends(get_db)
+):
+    result = get_allowed_pdfs_for_student(student_id=student_id, db=db)
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not resolve allowed PDFs for this student."
+        )
+
+    return result
+def generate_backend_pdf_url(student_id: str, file_id: str) -> str:
+    query = urlencode({
+        "student_id": student_id,
+        "file_id": file_id
+    })
+    return f"{BACKEND_PUBLIC_BASE_URL}/student-pdf?{query}"
+
+def extract_drive_file_id(url: str) -> str | None:
+    if not url:
+        return None
+
+    patterns = [
+        r"/d/([a-zA-Z0-9_-]+)",
+        r"id=([a-zA-Z0-9_-]+)",
+        r"/folders/([a-zA-Z0-9_-]+)"
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+
+    return None
+import io
+import fitz
+from fastapi.responses import StreamingResponse
+PAGE_IMAGE_CACHE = {}
+PAGE_IMAGE_CACHE_TTL_SECONDS = 60 * 10   # 10 minutes
+
+
+def get_cached_page_image(file_id: str, page: int):
+    cache_key = f"{file_id}:{page}"
+    entry = PAGE_IMAGE_CACHE.get(cache_key)
+
+    if not entry:
+        return None
+
+    age = time.time() - entry["cached_at"]
+    if age > PAGE_IMAGE_CACHE_TTL_SECONDS:
+        PAGE_IMAGE_CACHE.pop(cache_key, None)
+        return None
+
+    return entry["image_bytes"]
+
+
+def set_cached_page_image(file_id: str, page: int, image_bytes: bytes):
+    cache_key = f"{file_id}:{page}"
+    PAGE_IMAGE_CACHE[cache_key] = {
+        "image_bytes": image_bytes,
+        "cached_at": time.time()
+    }
+def get_cached_pdf_bytes(file_id: str):
+    entry = PDF_CACHE.get(file_id)
+
+    if not entry:
+        return None
+
+    age = time.time() - entry["cached_at"]
+    if age > PDF_CACHE_TTL_SECONDS:
+        PDF_CACHE.pop(file_id, None)
+        return None
+
+    return entry["pdf_bytes"]
+
+
+def set_cached_pdf_bytes(file_id: str, pdf_bytes: bytes):
+    PDF_CACHE[file_id] = {
+        "pdf_bytes": pdf_bytes,
+        "cached_at": time.time()
+    }
+
+@app.get("/student-pdf-page")
+async def student_pdf_page(
+    student_id: str,
+    file_id: str,
+    page: int = 1,
+    db: Session = Depends(get_db)
+):
+    print("\n========== STUDENT PDF PAGE START ==========")
+    print(f"student_id = {student_id}")
+    print(f"file_id    = {file_id}")
+    print(f"page       = {page}")
+
+    allowed_data = get_allowed_pdfs_for_student(student_id=student_id, db=db)
+
+    if not allowed_data:
+        raise HTTPException(
+            status_code=404,
+            detail="No allowed PDFs found for this student."
+        )
+
+    pdf_list = allowed_data.get("files", [])
+    allowed_file_ids = {pdf["id"] for pdf in pdf_list}
+
+    if file_id not in allowed_file_ids:
+        print("ACCESS DENIED: file not allowed for this student")
+        raise HTTPException(
+            status_code=403,
+            detail="You are not allowed to access this PDF."
+        )
+
+    try:
+        # -----------------------------
+        # STEP A: check rendered page cache first
+        # -----------------------------
+        cached_image = get_cached_page_image(file_id, page)
+        if cached_image is not None:
+            print(f"[PAGE CACHE HIT] Returning cached page image for file={file_id}, page={page}")
+            print("========== STUDENT PDF PAGE END ==========\n")
+            return StreamingResponse(
+                io.BytesIO(cached_image),
+                media_type="image/png"
+            )
+
+        print(f"[PAGE CACHE MISS] Rendering page {page} for file={file_id}")
+
+        # -----------------------------
+        # STEP B: get cached PDF bytes
+        # -----------------------------
+        pdf_bytes = get_cached_pdf_bytes(file_id)
+
+        if pdf_bytes is None:
+            print(f"[PDF CACHE MISS] Downloading file {file_id} from Drive for page render")
+            request = drive_service.files().get_media(fileId=file_id)
+            pdf_bytes = request.execute()
+            set_cached_pdf_bytes(file_id, pdf_bytes)
+        else:
+            print(f"[PDF CACHE HIT] Using cached PDF for page render: {file_id}")
+
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+        if page < 1 or page > len(pdf_doc):
+            raise HTTPException(
+                status_code=404,
+                detail="Requested page does not exist."
+            )
+
+        # -----------------------------
+        # STEP C: render page once
+        # -----------------------------
+        pdf_page = pdf_doc.load_page(page - 1)
+        pix = pdf_page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        image_bytes = pix.tobytes("png")
+
+        # -----------------------------
+        # STEP D: cache rendered page image
+        # -----------------------------
+        set_cached_page_image(file_id, page, image_bytes)
+
+        print("ACCESS GRANTED: returning newly rendered page image")
+        print("========== STUDENT PDF PAGE END ==========\n")
+
+        return StreamingResponse(
+            io.BytesIO(image_bytes),
+            media_type="image/png"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR while rendering PDF page: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to render PDF page."
+        )
+    
+@app.get("/student-pdf")
+async def student_pdf(
+    student_id: str,
+    file_id: str,
+    db: Session = Depends(get_db)
+):
+    print("\n========== STUDENT PDF ACCESS START ==========")
+    print(f"student_id = {student_id}")
+    print(f"file_id    = {file_id}")
+
+    allowed_data = get_allowed_pdfs_for_student(student_id=student_id, db=db)
+
+    if not allowed_data:
+        raise HTTPException(
+            status_code=404,
+            detail="No allowed PDFs found for this student."
+        )
+
+    pdf_list = allowed_data.get("files", [])
+    allowed_file_ids = {pdf["id"] for pdf in pdf_list}
+
+    if file_id not in allowed_file_ids:
+        print("ACCESS DENIED: file not allowed for this student")
+
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head>
+                <title>Access Denied</title>
+                <style>
+                    body {{
+                        margin: 0;
+                        padding: 0;
+                        font-family: Arial, sans-serif;
+                        background: #f7f7f7;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 100vh;
+                    }}
+
+                    .access-card {{
+                        max-width: 700px;
+                        width: 90%;
+                        background: white;
+                        border-radius: 16px;
+                        padding: 32px;
+                        box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+                        text-align: center;
+                    }}
+
+                    .icon {{
+                        font-size: 64px;
+                        margin-bottom: 16px;
+                    }}
+
+                    .title {{
+                        font-size: 32px;
+                        font-weight: 700;
+                        color: #dc2626;
+                        margin-bottom: 12px;
+                    }}
+
+                    .message {{
+                        font-size: 18px;
+                        color: #333;
+                        line-height: 1.6;
+                        margin-bottom: 24px;
+                    }}
+
+                    .subtext {{
+                        font-size: 15px;
+                        color: #666;
+                        line-height: 1.5;
+                        margin-bottom: 28px;
+                    }}
+
+                    .button {{
+                        display: inline-block;
+                        padding: 12px 22px;
+                        border-radius: 10px;
+                        background: #2563eb;
+                        color: white;
+                        text-decoration: none;
+                        font-weight: 600;
+                        font-size: 15px;
+                    }}
+
+                    .button:hover {{
+                        background: #1d4ed8;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="access-card">
+                    <div class="icon">🔒</div>
+                    <div class="title">Access Denied</div>
+
+                    <div class="message">
+                        You do not have permission to view this booklet.
+                    </div>
+
+                    <div class="subtext">
+                        This booklet does not belong to your currently allowed class, year, or term access.
+                        If you believe this is a mistake, please contact your teacher or support team.
+                    </div>
+
+                    
+                </div>
+            </body>
+            </html>
+            """,
+            status_code=403
+        )
+
+    print("ACCESS GRANTED: opening protected viewer shell")
+
+    try:
+        pdf_bytes = get_cached_pdf_bytes(file_id)
+
+        if pdf_bytes is None:
+            print(f"[PDF CACHE MISS] Downloading file {file_id} from Drive for viewer shell")
+            request = drive_service.files().get_media(fileId=file_id)
+            pdf_bytes = request.execute()
+            set_cached_pdf_bytes(file_id, pdf_bytes)
+        else:
+            print(f"[PDF CACHE HIT] Using cached PDF for viewer shell: {file_id}")
+
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(pdf_doc)
+
+        print("========== STUDENT PDF ACCESS END ==========\n")
+
+        return HTMLResponse(f"""
+        <html>
+        <head>
+            <title>Protected Booklet Viewer</title>
+            <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #f7f7f7;
+                margin: 0;
+                padding: 0;
+            }}
+            .viewer-shell {{
+                max-width: 1000px;
+                margin: 30px auto;
+                background: white;
+                padding: 24px;
+                border-radius: 12px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            }}
+            .viewer-title {{
+                font-size: 28px;
+                font-weight: 700;
+                margin-bottom: 10px;
+            }}
+            .viewer-meta {{
+                color: #444;
+                margin-bottom: 20px;
+            }}
+            .page-image {{
+                width: 100%;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                margin-top: 16px;
+            }}
+            .controls {{
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin-top: 16px;
+                margin-bottom: 12px;
+                flex-wrap: wrap;
+            }}
+            .controls button {{
+                padding: 10px 18px;
+                border: none;
+                border-radius: 8px;
+                background: #2563eb;
+                color: white;
+                font-size: 14px;
+                cursor: pointer;
+            }}
+            .controls button:disabled {{
+                background: #9ca3af;
+                cursor: not-allowed;
+            }}
+            .page-status {{
+                font-weight: 600;
+                color: #222;
+            }}
+            .jump-box {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-left: auto;
+            }}
+            .jump-box input {{
+                width: 90px;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 8px;
+                font-size: 14px;
+            }}
+            .jump-box button {{
+                padding: 10px 16px;
+                border: none;
+                border-radius: 8px;
+                background: #16a34a;
+                color: white;
+                font-size: 14px;
+                cursor: pointer;
+            }}
+            </style>
+        </head>
+        <body>
+            <div class="viewer-shell">
+                <div class="viewer-title">Protected Booklet Viewer</div>
+
+                <div class="viewer-meta">
+                    Student: <b>{student_id}</b><br/>
+                    File ID: <b>{file_id}</b><br/>
+                    Total pages: <b>{total_pages}</b>
+                </div>
+
+                <div class="controls">
+                    <button id="prevBtn">Previous</button>
+                    <span class="page-status" id="pageStatus">Page 1 of {total_pages}</span>
+                    <button id="nextBtn">Next</button>
+
+                    <div class="jump-box">
+                        <label for="pageInput"><b>Go to page:</b></label>
+                        <input
+                            id="pageInput"
+                            type="number"
+                            min="1"
+                            max="{total_pages}"
+                            placeholder="Page #"
+                        />
+                        <button id="goBtn">Go</button>
+                    </div>
+                </div>
+
+                <img
+                    id="pdfPageImage"
+                    class="page-image"
+                    src="/student-pdf-page?student_id={student_id}&file_id={file_id}&page=1"
+                    alt="Booklet page"
+                />
+            </div>
+
+            <script>
+                const studentId = "{student_id}";
+                const fileId = "{file_id}";
+                const totalPages = {total_pages};
+
+                let currentPage = 1;
+
+                const img = document.getElementById("pdfPageImage");
+                const prevBtn = document.getElementById("prevBtn");
+                const nextBtn = document.getElementById("nextBtn");
+                const pageStatus = document.getElementById("pageStatus");
+                const pageInput = document.getElementById("pageInput");
+                const goBtn = document.getElementById("goBtn");
+
+                function updateViewer() {{
+                    img.src = `/student-pdf-page?student_id=${{studentId}}&file_id=${{fileId}}&page=${{currentPage}}`;
+                    pageStatus.textContent = `Page ${{currentPage}} of ${{totalPages}}`;
+
+                    prevBtn.disabled = currentPage === 1;
+                    nextBtn.disabled = currentPage === totalPages;
+                    pageInput.value = currentPage;
+                }}
+
+                function jumpToPage(pageNumber) {{
+                    let targetPage = parseInt(pageNumber, 10);
+
+                    if (isNaN(targetPage)) {{
+                        return;
+                    }}
+
+                    if (targetPage < 1) {{
+                        targetPage = 1;
+                    }}
+
+                    if (targetPage > totalPages) {{
+                        targetPage = totalPages;
+                    }}
+
+                    currentPage = targetPage;
+                    updateViewer();
+                }}
+
+                prevBtn.addEventListener("click", () => {{
+                    if (currentPage > 1) {{
+                        currentPage -= 1;
+                        updateViewer();
+                    }}
+                }});
+
+                nextBtn.addEventListener("click", () => {{
+                    if (currentPage < totalPages) {{
+                        currentPage += 1;
+                        updateViewer();
+                    }}
+                }});
+
+                goBtn.addEventListener("click", () => {{
+                    jumpToPage(pageInput.value);
+                }});
+
+                pageInput.addEventListener("keydown", (event) => {{
+                    if (event.key === "Enter") {{
+                        jumpToPage(pageInput.value);
+                    }}
+                }});
+
+                updateViewer();
+            </script>
+        </body>
+        </html>
+        """)
+
+    except Exception as e:
+        print(f"ERROR while preparing viewer shell: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load booklet viewer."
+        )
+
 @app.get("/search")
 async def search_pdfs(
     query: str,
@@ -2944,7 +3982,28 @@ async def search_pdfs(
             "snippet": "Your query does not seem to be educational or relevant.",
             "links": []
         }])
+    student = (
+        db.query(Student)
+        .filter(Student.name == user_id)
+        .first()
+    )
 
+    if not student:
+        print(f"[ERROR] No student found for chatbot user_id={user_id}")
+        return JSONResponse([{
+            "name": "**Academy Answer**",
+            "snippet": "Unable to identify the student account for this request.",
+            "links": []
+        }])
+
+    real_student_id = student.student_id
+
+    print("[DEBUG] Student resolved for chatbot request:")
+    print(f"        chatbot user_id = {user_id}")
+    print(f"        student.name    = {student.name}")
+    print(f"        student_id      = {student.student_id}")
+    print(f"        class_name DB   = {student.class_name}")
+    print(f"        student_year DB = {student.student_year}")
     # ------------------ Step 1: Prepare PDF list ------------------
     if not pdf_listing_done:
         print("[INFO] Fetching PDF list from Google Drive for the first time...")
@@ -3004,36 +4063,73 @@ async def search_pdfs(
     # -------------------------------------------------
 
     # ------------------ Step 3: Handle PDF link requests ------------------
+    print("\n================ PDF REQUEST DEBUG START ================")
+    print(f"[DEBUG] Query received for PDF detection: {query}")
+
+    pdf_request_detected = is_pdf_request(query, user_id=user_id, db=db)
+    print(f"[DEBUG] is_pdf_request returned: {pdf_request_detected}")
+    print(f"[DEBUG] pdf_files count before PDF branch: {len(pdf_files)}")
+
     pdf_urls_to_send = []
-    if pdf_files and is_pdf_request(query, user_id=user_id, db=db):
+    if pdf_files and pdf_request_detected:
+        print("[DEBUG] Entered PDF request branch")
+
         query_lower = query.lower()
         year_match = re.search(r"year\s*(\d+)", query_lower)
         query_year = year_match.group(1) if year_match else None
+
         term_match = re.search(r"term\s*(\d+)", query_lower)
         query_term = term_match.group(1) if term_match else None
+
         week_match = re.search(r"week\s*(\d+)", query_lower)
         query_week = week_match.group(1) if week_match else None
+
+        print(f"[DEBUG] Extracted query_year = {query_year}")
+        print(f"[DEBUG] Extracted query_term = {query_term}")
+        print(f"[DEBUG] Extracted query_week = {query_week}")
 
         filtered_pdfs = []
         for pdf in pdf_files:
             path_lower = pdf.get("path", "").lower()
             name_lower = pdf["name"].lower()
+
+            print("--------------------------------------------------")
+            print(f"[DEBUG] Checking PDF: {pdf['name']}")
+            print(f"[DEBUG] path_lower = {path_lower}")
+            print(f"[DEBUG] name_lower = {name_lower}")
+
             if query_year and not (
                 f"year {query_year}" in path_lower or
                 f"year_{query_year}" in path_lower or
                 f"y{query_year}" in name_lower
             ):
+                print("[DEBUG] Skipped بسبب year mismatch")
                 continue
+
             term_matches = re.findall(r"(?:term|t)\s*[_-]*\s*(\d+)", name_lower)
             week_matches = re.findall(r"(?:week|w)\s*[_-]*\s*(\d+)", name_lower)
+
+            print(f"[DEBUG] term_matches = {term_matches}")
+            print(f"[DEBUG] week_matches = {week_matches}")
+
             if (query_term is None or query_term in term_matches) and (query_week is None or query_week in week_matches):
+                print("[DEBUG] PDF matched filters")
                 filtered_pdfs.append(pdf)
+            else:
+                print("[DEBUG] PDF did NOT match term/week filters")
+
+        print(f"[DEBUG] filtered_pdfs count = {len(filtered_pdfs)}")
 
         if filtered_pdfs:
-            pdf_urls_to_send = [generate_drive_pdf_url(pdf["id"]) for pdf in filtered_pdfs]
+            pdf_urls_to_send = [
+                f"{BACKEND_PUBLIC_BASE_URL}/student-pdf?student_id={real_student_id}&file_id={pdf['id']}"
+                for pdf in filtered_pdfs
+            ]
             answer_text = f"Here are the PDFs you requested:\n" + "\n".join(pdf_urls_to_send)
+            print("[DEBUG] Returning PDF response")
         else:
             answer_text = "No PDFs found."
+            print("[DEBUG] No filtered PDFs found, returning 'No PDFs found.'")
 
         source_name = "Academy Answer"
         results.append({
@@ -3041,10 +4137,15 @@ async def search_pdfs(
             "snippet": answer_text,
             "links": pdf_urls_to_send
         })
+
         append_to_user_context(user_id, "user", query)
         append_to_user_context(user_id, "assistant", answer_text)
+
+        print("================ PDF REQUEST DEBUG END ================\n")
         return JSONResponse(results)
 
+    print("[DEBUG] PDF branch NOT entered")
+    print("================ PDF REQUEST DEBUG END ================\n")
     # ------------------ Step 4: Retrieve top PDF chunks ------------------
     if pdf_files and not use_context_only:
         class_list = [cn.strip() for cn in class_name.split(",")] if class_name else []
@@ -3115,6 +4216,8 @@ async def search_pdfs(
 
     #if use_context_only or not top_chunks:
      #   gpt_prompt = f"""
+
+
 #You are an assistant. Follow the instructions below carefully.
 
 #Style: {reasoning_instruction}
@@ -3201,7 +4304,18 @@ Guidelines:
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
     # ------------------ Step 9: Prepare final results ------------------
-    used_pdfs = [c.get("pdf_link") for c in top_chunks if c.get("pdf_link")]
+    used_pdfs = []
+
+    for c in top_chunks:
+        pdf_link = c.get("pdf_link")
+        if not pdf_link:
+            continue
+
+        file_id = extract_drive_file_id(pdf_link)
+        if not file_id:
+            continue
+
+        used_pdfs.append(generate_backend_pdf_url(user_id, file_id))
 
     results.append({
         "name": f"**{source_name}**",
