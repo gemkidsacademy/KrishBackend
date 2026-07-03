@@ -77,7 +77,7 @@ from openai import OpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 
 # Rapidfuzz for string matching
 from rapidfuzz import fuzz
@@ -4177,6 +4177,12 @@ async def search_pdfs(
         
             # Sort by score descending
             top_chunks = sorted(top_chunks, key=lambda x: x['score'], reverse=True)[:TOP_K]
+            print("\n========== TOP CHUNKS DEBUG ==========")
+            for i, c in enumerate(top_chunks[:3], 1):
+                print(f"\n--- Chunk {i} ---")
+                for k, v in c.items():
+                    print(f"{k}: {v}")
+            print("======================================\n")
         else:
             top_chunks = []  # fallback if FAISS not initialized
 
