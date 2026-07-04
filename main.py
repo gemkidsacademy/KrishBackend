@@ -2568,41 +2568,110 @@ processed_pdfs = set()  # Keep track of PDFs processed in this session
 
 def ensure_vectorstores_for_all_pdfs(pdf_files):
     """
-    Ensures vector stores are created for all PDFs in the provided list.
-    Uses GCS existence checks and session memory to avoid duplicate work.
+    Diagnostic version:
+    Logs whether we are checking the PDF blob instead of the vectorstore prefix.
+    Does NOT change the behavior yet — it only makes the current decision visible.
     """
-    for pdf in pdf_files:
+    print("\n================ ensure_vectorstores_for_all_pdfs START ================\n")
+
+    for idx, pdf in enumerate(pdf_files, start=1):
+        print(f"\n---------------- PDF #{idx} ----------------")
+
         pdf_id = pdf.get("id")
         pdf_name = pdf.get("name", "Unknown")
-        pdf_path = pdf.get("path")  # Full folder path from Drive
+        pdf_path = pdf.get("path", "")
+
+        print(f"[DEBUG] pdf_id   = {pdf_id}")
+        print(f"[DEBUG] pdf_name = {pdf_name}")
+        print(f"[DEBUG] pdf_path = {pdf_path}")
 
         if not pdf_id:
             print(f"[DEBUG] PDF {pdf_name} has no Drive ID. Skipping.")
             continue
 
-        # Skip if already processed in this session
+        # --------------------------------------------------
+        # Build the vectorstore prefix we EXPECT for this PDF
+        # --------------------------------------------------
+        parent_folder = pdf_path.rsplit("/", 1)[0] if "/" in pdf_path else ""
+        pdf_base_name = pdf_name.rsplit(".", 1)[0]
+        expected_vectorstore_prefix = f"{parent_folder}/vectorstore_{pdf_base_name}/".replace("\\", "/")
+
+        print(f"[DEBUG] parent_folder               = {parent_folder}")
+        print(f"[DEBUG] pdf_base_name               = {pdf_base_name}")
+        print(f"[DEBUG] expected_vectorstore_prefix = {expected_vectorstore_prefix}")
+
+        # --------------------------------------------------
+        # Check session memory
+        # --------------------------------------------------
         if pdf_id in processed_pdfs:
             print(f"[DEBUG] PDF {pdf_name} already processed in this session. Skipping.")
             continue
 
-        # Skip if PDF already exists in GCS
-        if gcs_bucket.blob(pdf_path).exists():
-            print(f"[DEBUG] PDF {pdf_name} already exists in GCS. Skipping.")
+        # --------------------------------------------------
+        # Check current logic: does blob(pdf_path) exist?
+        # --------------------------------------------------
+        try:
+            pdf_blob_exists = gcs_bucket.blob(pdf_path).exists()
+        except Exception as e:
+            pdf_blob_exists = f"ERROR: {e}"
+
+        print(f"[DEBUG] gcs_bucket.blob(pdf_path).exists() = {pdf_blob_exists}")
+
+        # --------------------------------------------------
+        # Check what we ACTUALLY care about:
+        # are there any files under the expected vectorstore prefix?
+        # --------------------------------------------------
+        try:
+            vectorstore_blobs = list(
+                gcs_bucket.list_blobs(prefix=expected_vectorstore_prefix, max_results=10)
+            )
+            vectorstore_blob_names = [b.name for b in vectorstore_blobs]
+        except Exception as e:
+            vectorstore_blobs = []
+            vectorstore_blob_names = [f"ERROR: {e}"]
+
+        print(f"[DEBUG] vectorstore blob count under expected prefix = {len(vectorstore_blobs)}")
+        if vectorstore_blob_names:
+            print("[DEBUG] vectorstore blobs found:")
+            for name in vectorstore_blob_names:
+                print(f"        - {name}")
+        else:
+            print("[DEBUG] No vectorstore blobs found under expected prefix.")
+
+        # --------------------------------------------------
+        # Show the current decision path without changing it
+        # --------------------------------------------------
+        if pdf_blob_exists:
+            print(
+                f"[DEBUG] CURRENT LOGIC DECISION: "
+                f"Skip {pdf_name} because gcs_bucket.blob(pdf_path).exists() returned True."
+            )
+
+            if len(vectorstore_blobs) == 0:
+                print(
+                    f"[WARNING] Suspicious case: PDF blob exists, but NO vectorstore blobs were found "
+                    f"under {expected_vectorstore_prefix}. "
+                    f"This suggests the current skip condition may be wrong."
+                )
+
             processed_pdfs.add(pdf_id)
             continue
 
-        # Print before creating vector store
-        print(f"[DEBUG] Creating vector store for PDF: {pdf_name}, Path: {pdf_path}")
+        # --------------------------------------------------
+        # If current logic decides it does not exist, create vectorstore
+        # --------------------------------------------------
+        print(f"[DEBUG] CURRENT LOGIC DECISION: Create vectorstore for PDF: {pdf_name}")
+        print(f"[DEBUG] Calling create_vectorstore_for_pdf(...) for {pdf_name}")
 
-        # Create vector store for this PDF
-        create_vectorstore_for_pdf(pdf)
+        try:
+            create_vectorstore_for_pdf(pdf)
+            print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
+            processed_pdfs.add(pdf_id)
+        except Exception as e:
+            print(f"[ERROR] Failed to create vector store for PDF {pdf_name}: {e}")
 
-        # Print after successful creation
-        print(f"[DEBUG] Vector store created for PDF: {pdf_name}")
+    print("\n================ ensure_vectorstores_for_all_pdfs END ================\n")
 
-        # Mark as processed in memory
-        processed_pdfs.add(pdf_id) 
-        
 def load_vectorstore_from_gcs(gcs_prefix: str, embeddings: OpenAIEmbeddings) -> FAISS:
     """
     Downloads the FAISS vector store files from a GCS prefix and loads the vector store.
@@ -3614,11 +3683,143 @@ async def student_pdf_page(
             status_code=500,
             detail="Failed to render PDF page."
         )
-    
+@app.get("/student-pdf-search")
+async def student_pdf_search(
+    student_id: str,
+    file_id: str,
+    query: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Search inside a protected PDF that the student is allowed to access.
+    Returns matching page numbers with small text snippets.
+    """
+    print("\n========== STUDENT PDF SEARCH START ==========")
+    print(f"student_id = {student_id}")
+    print(f"file_id    = {file_id}")
+    print(f"query      = {query}")
+
+    try:
+        # --------------------------------------------------
+        # Step 1: Validate query
+        # --------------------------------------------------
+        query = (query or "").strip()
+        if not query:
+            print("[WARNING] Empty search query received.")
+            return JSONResponse({
+                "query": query,
+                "matches": []
+            })
+
+        # --------------------------------------------------
+        # Step 2: Check student access to this PDF
+        # --------------------------------------------------
+        allowed_data = get_allowed_pdfs_for_student(student_id=student_id, db=db)
+
+        if not allowed_data:
+            print("[ERROR] No allowed PDFs found for this student.")
+            raise HTTPException(
+                status_code=404,
+                detail="No allowed PDFs found for this student."
+            )
+
+        pdf_list = allowed_data.get("files", [])
+        allowed_file_ids = {pdf["id"] for pdf in pdf_list}
+
+        if file_id not in allowed_file_ids:
+            print("[ERROR] Access denied: file not allowed for this student.")
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to search this booklet."
+            )
+
+        print("[DEBUG] Access granted for PDF search.")
+
+        # --------------------------------------------------
+        # Step 3: Load PDF bytes (cache first, then Drive)
+        # --------------------------------------------------
+        pdf_bytes = get_cached_pdf_bytes(file_id)
+
+        if pdf_bytes is None:
+            print(f"[PDF CACHE MISS] Downloading file {file_id} from Drive for PDF search")
+            request = drive_service.files().get_media(fileId=file_id)
+            pdf_bytes = request.execute()
+            set_cached_pdf_bytes(file_id, pdf_bytes)
+        else:
+            print(f"[PDF CACHE HIT] Using cached PDF for PDF search: {file_id}")
+
+        # --------------------------------------------------
+        # Step 4: Open PDF and search page by page
+        # --------------------------------------------------
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(pdf_doc)
+
+        query_lower = query.lower()
+        matches = []
+
+        print(f"[DEBUG] Searching across {total_pages} pages...")
+
+        for page_idx in range(total_pages):
+            page_number = page_idx + 1
+
+            try:
+                page = pdf_doc[page_idx]
+                page_text = page.get_text("text") or ""
+                page_text_clean = page_text.replace("\x00", " ").strip()
+
+                if not page_text_clean:
+                    continue
+
+                page_text_lower = page_text_clean.lower()
+
+                if query_lower in page_text_lower:
+                    # Build a small snippet around the first match
+                    match_pos = page_text_lower.find(query_lower)
+
+                    snippet_start = max(0, match_pos - 120)
+                    snippet_end = min(len(page_text_clean), match_pos + len(query) + 120)
+
+                    snippet = page_text_clean[snippet_start:snippet_end]
+                    snippet = snippet.replace("\n", " ").replace("  ", " ").strip()
+
+                    matches.append({
+                        "page": page_number,
+                        "snippet": snippet
+                    })
+
+                    print(f"[MATCH] Found match on page {page_number}")
+                    print(f"        snippet = {snippet[:300]}")
+
+            except Exception as page_err:
+                print(f"[WARNING] Failed searching page {page_number}: {page_err}")
+
+        print(f"[DEBUG] Search complete. Total matches = {len(matches)}")
+        print("========== STUDENT PDF SEARCH END ==========\n")
+
+        return JSONResponse({
+            "query": query,
+            "matches": matches
+        })
+
+    except HTTPException as http_err:
+        print(f"[HTTP ERROR] {http_err.detail}")
+        print("========== STUDENT PDF SEARCH FAILED ==========\n")
+        raise http_err
+
+    except Exception as e:
+        print(f"[ERROR] Failed PDF search: {e}")
+        import traceback
+        traceback.print_exc()
+        print("========== STUDENT PDF SEARCH FAILED ==========\n")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to search inside the booklet."
+        )
 @app.get("/student-pdf")
 async def student_pdf(
     student_id: str,
     file_id: str,
+    page: int = 1,
     db: Session = Depends(get_db)
 ):
     print("\n========== STUDENT PDF ACCESS START ==========")
@@ -3706,6 +3907,72 @@ async def student_pdf(
                     .button:hover {{
                         background: #1d4ed8;
                     }}
+                    .pdf-search-bar {
+                        display: flex;
+                        gap: 10px;
+                        margin: 16px auto;
+                        width: min(900px, 92%);
+                        align-items: center;
+                    }
+
+                    .pdf-search-bar input {
+                        flex: 1;
+                        padding: 10px 12px;
+                        font-size: 15px;
+                        border: 1px solid #ccc;
+                        border-radius: 8px;
+                        outline: none;
+                    }
+
+                    .pdf-search-bar button {
+                        padding: 10px 16px;
+                        font-size: 15px;
+                        border: none;
+                        border-radius: 8px;
+                        cursor: pointer;
+                        background: #f97316;
+                        color: white;
+                        font-weight: 600;
+                    }
+
+                    .pdf-search-results {
+                        width: min(900px, 92%);
+                        margin: 10px auto 18px auto;
+                        display: flex;
+                        flex-direction: column;
+                        gap: 10px;
+                    }
+
+                    .pdf-search-result-item {
+                        border: 1px solid #e5e7eb;
+                        border-radius: 10px;
+                        padding: 12px;
+                        background: #fff;
+                        cursor: pointer;
+                        transition: background 0.2s ease;
+                    }
+
+                    .pdf-search-result-item:hover {
+                        background: #f9fafb;
+                    }
+
+                    .pdf-search-result-page {
+                        font-weight: 700;
+                        margin-bottom: 6px;
+                        color: #111827;
+                    }
+
+                    .pdf-search-result-snippet {
+                        color: #374151;
+                        line-height: 1.5;
+                        font-size: 14px;
+                    }
+
+                    .pdf-search-empty {
+                        color: #6b7280;
+                        padding: 8px 2px;
+                        font-size: 14px;
+                    }
                 </style>
             </head>
             <body>
@@ -3745,6 +4012,15 @@ async def student_pdf(
 
         pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         total_pages = len(pdf_doc)
+        requested_page = page if page else 1
+
+        if requested_page < 1:
+            requested_page = 1
+        if requested_page > total_pages:
+            requested_page = total_pages
+
+        print(f"[DEBUG] requested_page = {page}")
+        print(f"[DEBUG] clamped_page   = {requested_page}")
 
         print("========== STUDENT PDF ACCESS END ==========\n")
 
@@ -3753,82 +4029,162 @@ async def student_pdf(
         <head>
             <title>Protected Booklet Viewer</title>
             <style>
-            body {{
-                font-family: Arial, sans-serif;
-                background: #f7f7f7;
-                margin: 0;
-                padding: 0;
-            }}
-            .viewer-shell {{
-                max-width: 1000px;
-                margin: 30px auto;
-                background: white;
-                padding: 24px;
-                border-radius: 12px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-            }}
-            .viewer-title {{
-                font-size: 28px;
-                font-weight: 700;
-                margin-bottom: 10px;
-            }}
-            .viewer-meta {{
-                color: #444;
-                margin-bottom: 20px;
-            }}
-            .page-image {{
-                width: 100%;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                margin-top: 16px;
-            }}
-            .controls {{
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-top: 16px;
-                margin-bottom: 12px;
-                flex-wrap: wrap;
-            }}
-            .controls button {{
-                padding: 10px 18px;
-                border: none;
-                border-radius: 8px;
-                background: #2563eb;
-                color: white;
-                font-size: 14px;
-                cursor: pointer;
-            }}
-            .controls button:disabled {{
-                background: #9ca3af;
-                cursor: not-allowed;
-            }}
-            .page-status {{
-                font-weight: 600;
-                color: #222;
-            }}
-            .jump-box {{
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                margin-left: auto;
-            }}
-            .jump-box input {{
-                width: 90px;
-                padding: 10px;
-                border: 1px solid #ccc;
-                border-radius: 8px;
-                font-size: 14px;
-            }}
-            .jump-box button {{
-                padding: 10px 16px;
-                border: none;
-                border-radius: 8px;
-                background: #16a34a;
-                color: white;
-                font-size: 14px;
-                cursor: pointer;
-            }}
+                body {{
+                    font-family: Arial, sans-serif;
+                    background: #f7f7f7;
+                    margin: 0;
+                    padding: 0;
+                }}
+
+                .viewer-shell {{
+                    max-width: 1000px;
+                    margin: 30px auto;
+                    background: white;
+                    padding: 24px;
+                    border-radius: 12px;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                }}
+
+                .viewer-title {{
+                    font-size: 28px;
+                    font-weight: 700;
+                    margin-bottom: 10px;
+                }}
+
+                .viewer-meta {{
+                    color: #444;
+                    margin-bottom: 20px;
+                    line-height: 1.6;
+                }}
+
+                .pdf-search-bar {{
+                    display: flex;
+                    gap: 10px;
+                    margin: 18px 0 12px 0;
+                    align-items: center;
+                    flex-wrap: wrap;
+                }}
+
+                .pdf-search-bar input {{
+                    flex: 1;
+                    min-width: 220px;
+                    padding: 10px 12px;
+                    font-size: 15px;
+                    border: 1px solid #ccc;
+                    border-radius: 8px;
+                    outline: none;
+                }}
+
+                .pdf-search-bar button {{
+                    padding: 10px 16px;
+                    border: none;
+                    border-radius: 8px;
+                    background: #f97316;
+                    color: white;
+                    font-size: 14px;
+                    font-weight: 600;
+                    cursor: pointer;
+                }}
+
+                .pdf-search-results {{
+                    margin: 10px 0 20px 0;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }}
+
+                .pdf-search-result-item {{
+                    border: 1px solid #e5e7eb;
+                    border-radius: 10px;
+                    padding: 12px;
+                    background: #fff;
+                    cursor: pointer;
+                    transition: background 0.2s ease;
+                }}
+
+                .pdf-search-result-item:hover {{
+                    background: #f9fafb;
+                }}
+
+                .pdf-search-result-page {{
+                    font-weight: 700;
+                    margin-bottom: 6px;
+                    color: #111827;
+                }}
+
+                .pdf-search-result-snippet {{
+                    color: #374151;
+                    line-height: 1.5;
+                    font-size: 14px;
+                }}
+
+                .pdf-search-empty {{
+                    color: #6b7280;
+                    padding: 8px 2px;
+                    font-size: 14px;
+                }}
+
+                .controls {{
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    margin-top: 16px;
+                    margin-bottom: 12px;
+                    flex-wrap: wrap;
+                }}
+
+                .controls button {{
+                    padding: 10px 18px;
+                    border: none;
+                    border-radius: 8px;
+                    background: #2563eb;
+                    color: white;
+                    font-size: 14px;
+                    cursor: pointer;
+                }}
+
+                .controls button:disabled {{
+                    background: #9ca3af;
+                    cursor: not-allowed;
+                }}
+
+                .page-status {{
+                    font-weight: 600;
+                    color: #222;
+                }}
+
+                .jump-box {{
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    margin-left: auto;
+                    flex-wrap: wrap;
+                }}
+
+                .jump-box input {{
+                    width: 90px;
+                    padding: 10px;
+                    border: 1px solid #ccc;
+                    border-radius: 8px;
+                    font-size: 14px;
+                }}
+
+                .jump-box button {{
+                    padding: 10px 16px;
+                    border: none;
+                    border-radius: 8px;
+                    background: #16a34a;
+                    color: white;
+                    font-size: 14px;
+                    cursor: pointer;
+                }}
+
+                .page-image {{
+                    width: 100%;
+                    border: 1px solid #ddd;
+                    border-radius: 8px;
+                    margin-top: 16px;
+                }}
             </style>
         </head>
         <body>
@@ -3841,9 +4197,23 @@ async def student_pdf(
                     Total pages: <b>{total_pages}</b>
                 </div>
 
+                <!-- Search Bar -->
+                <div class="pdf-search-bar">
+                    <input
+                        type="text"
+                        id="pdfSearchInput"
+                        placeholder="Search inside this booklet..."
+                    />
+                    <button id="pdfSearchBtn">Search</button>
+                </div>
+
+                <!-- Search Results -->
+                <div id="pdfSearchResults" class="pdf-search-results"></div>
+
+                <!-- Page Controls -->
                 <div class="controls">
                     <button id="prevBtn">Previous</button>
-                    <span class="page-status" id="pageStatus">Page 1 of {total_pages}</span>
+                    <span class="page-status" id="pageStatus">Page {requested_page} of {total_pages}</span>
                     <button id="nextBtn">Next</button>
 
                     <div class="jump-box">
@@ -3859,10 +4229,11 @@ async def student_pdf(
                     </div>
                 </div>
 
+                <!-- Page Image -->
                 <img
                     id="pdfPageImage"
                     class="page-image"
-                    src="/student-pdf-page?student_id={student_id}&file_id={file_id}&page=1"
+                    src="/student-pdf-page?student_id={student_id}&file_id={file_id}&page={requested_page}"
                     alt="Booklet page"
                 />
             </div>
@@ -3872,7 +4243,7 @@ async def student_pdf(
                 const fileId = "{file_id}";
                 const totalPages = {total_pages};
 
-                let currentPage = 1;
+                let currentPage = {requested_page};
 
                 const img = document.getElementById("pdfPageImage");
                 const prevBtn = document.getElementById("prevBtn");
@@ -3880,6 +4251,10 @@ async def student_pdf(
                 const pageStatus = document.getElementById("pageStatus");
                 const pageInput = document.getElementById("pageInput");
                 const goBtn = document.getElementById("goBtn");
+
+                const pdfSearchInput = document.getElementById("pdfSearchInput");
+                const pdfSearchBtn = document.getElementById("pdfSearchBtn");
+                const pdfSearchResults = document.getElementById("pdfSearchResults");
 
                 function updateViewer() {{
                     img.src = `/student-pdf-page?student_id=${{studentId}}&file_id=${{fileId}}&page=${{currentPage}}`;
@@ -3909,6 +4284,64 @@ async def student_pdf(
                     updateViewer();
                 }}
 
+                function escapeHtml(text) {{
+                    return text
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                }}
+
+                async function searchInsidePdf() {{
+                    const query = pdfSearchInput.value.trim();
+
+                    if (!query) {{
+                        pdfSearchResults.innerHTML = '<div class="pdf-search-empty">Please enter something to search.</div>';
+                        return;
+                    }}
+
+                    pdfSearchResults.innerHTML = '<div class="pdf-search-empty">Searching...</div>';
+
+                    try {{
+                        const res = await fetch(
+                            `/student-pdf-search?student_id=${{encodeURIComponent(studentId)}}&file_id=${{encodeURIComponent(fileId)}}&query=${{encodeURIComponent(query)}}`
+                        );
+
+                        if (!res.ok) {{
+                            throw new Error(`Search request failed with status ${{res.status}}`);
+                        }}
+
+                        const data = await res.json();
+                        const matches = data.matches || [];
+
+                        if (matches.length === 0) {{
+                            pdfSearchResults.innerHTML = '<div class="pdf-search-empty">No matches found.</div>';
+                            return;
+                        }}
+
+                        pdfSearchResults.innerHTML = matches.map(match => `
+                            <div class="pdf-search-result-item" data-page="${{match.page}}">
+                                <div class="pdf-search-result-page">Page ${{match.page}}</div>
+                                <div class="pdf-search-result-snippet">${{escapeHtml(match.snippet || "")}}</div>
+                            </div>
+                        `).join("");
+
+                        document.querySelectorAll(".pdf-search-result-item").forEach(item => {{
+                            item.addEventListener("click", () => {{
+                                const page = parseInt(item.dataset.page, 10);
+                                if (!Number.isNaN(page)) {{
+                                    jumpToPage(page);
+                                }}
+                            }});
+                        }});
+
+                    }} catch (err) {{
+                        console.error("PDF search failed:", err);
+                        pdfSearchResults.innerHTML = '<div class="pdf-search-empty">Search failed. Please try again.</div>';
+                    }}
+                }}
+
                 prevBtn.addEventListener("click", () => {{
                     if (currentPage > 1) {{
                         currentPage -= 1;
@@ -3930,6 +4363,14 @@ async def student_pdf(
                 pageInput.addEventListener("keydown", (event) => {{
                     if (event.key === "Enter") {{
                         jumpToPage(pageInput.value);
+                    }}
+                }});
+
+                pdfSearchBtn.addEventListener("click", searchInsidePdf);
+
+                pdfSearchInput.addEventListener("keydown", (event) => {{
+                    if (event.key === "Enter") {{
+                        searchInsidePdf();
                     }}
                 }});
 
@@ -3976,12 +4417,12 @@ async def search_pdfs(
         }])
 
     #------------------ Step 0b: Check educational query ------------------
-    if not is_educational_query_openai(query, user_id=user_id, db=db):
-        return JSONResponse([{
-            "name": "**Academy Answer**",
-            "snippet": "Your query does not seem to be educational or relevant.",
-            "links": []
-        }])
+    #if not is_educational_query_openai(query, user_id=user_id, db=db):
+     #   return JSONResponse([{
+      #      "name": "**Academy Answer**",
+       #     "snippet": "Your query does not seem to be educational or relevant.",
+        #    "links": []
+       # }])
     student = (
         db.query(Student)
         .filter(Student.name == user_id)
@@ -4147,56 +4588,179 @@ async def search_pdfs(
     print("[DEBUG] PDF branch NOT entered")
     print("================ PDF REQUEST DEBUG END ================\n")
     # ------------------ Step 4: Retrieve top PDF chunks ------------------
+    top_chunks = []
+    raw_top_chunks = []
+    fallback_reason = None
+
+    print("\n================ ACADEMY RETRIEVAL DEBUG START ================")
+    print(f"[DEBUG] Query = {query}")
+    print(f"[DEBUG] class_name received = {class_name}")
+    print(f"[DEBUG] pdf_files count = {len(pdf_files)}")
+    print(f"[DEBUG] use_context_only = {use_context_only}")
+    print(f"[DEBUG] FAISS_INDEX is None? {FAISS_INDEX is None}")
+    print(f"[DEBUG] FAISS_METADATA is None? {FAISS_METADATA is None}")
+
+    faiss_available = FAISS_INDEX is not None and FAISS_METADATA is not None
+    print(f"[DEBUG] faiss_available = {faiss_available}")
+
     if pdf_files and not use_context_only:
         class_list = [cn.strip() for cn in class_name.split(",")] if class_name else []
-        if FAISS_INDEX is not None and FAISS_METADATA is not None:
-            # Step 1a: Convert query to embedding
-            query_embedding = OpenAIEmbeddings(
-                model="text-embedding-3-large",
-                openai_api_key=os.environ.get("OPENAI_API_KEY")
-            ).embed_query(query)
-        
-            query_vector = np.array([query_embedding], dtype='float32')
-            faiss.normalize_L2(query_vector)
-        
-            # Step 1b: Search FAISS index
-            k = TOP_K
-            D, I = FAISS_INDEX.search(query_vector, k)  # distances, indices
-        
-            top_chunks = []
-            for idx, score in zip(I[0], D[0]):
-                if idx >= len(FAISS_METADATA):
-                    continue
-                chunk_meta = FAISS_METADATA[idx].copy()
-                chunk_meta['score'] = float(score)
-                top_chunks.append(chunk_meta)
-        
-            # Optional: Filter by class_name if provided
-            if class_list:
-                top_chunks = [c for c in top_chunks if matches_class(normalize_pdf_name(c.get("pdf_name","")), class_list)]
-        
-            # Sort by score descending
-            top_chunks = sorted(top_chunks, key=lambda x: x['score'], reverse=True)[:TOP_K]
-            print("\n========== TOP CHUNKS DEBUG ==========")
-            for i, c in enumerate(top_chunks[:3], 1):
-                print(f"\n--- Chunk {i} ---")
-                for k, v in c.items():
-                    print(f"{k}: {v}")
-            print("======================================\n")
+        print(f"[DEBUG] class_list = {class_list}")
+
+        if faiss_available:
+            if FAISS_INDEX is not None:
+                print(f"[DEBUG] FAISS_INDEX.ntotal = {FAISS_INDEX.ntotal}")
+            if FAISS_METADATA is not None:
+                print(f"[DEBUG] len(FAISS_METADATA) = {len(FAISS_METADATA)}")
+
+            # --------------------------------------------------
+            # Step 4.1: Convert query to embedding
+            # --------------------------------------------------
+            try:
+                print("[DEBUG] Embedding query for FAISS retrieval...")
+                query_embedding = OpenAIEmbeddings(
+                    model="text-embedding-3-large",
+                    openai_api_key=os.environ.get("OPENAI_API_KEY")
+                ).embed_query(query)
+
+                query_vector = np.array([query_embedding], dtype="float32")
+                faiss.normalize_L2(query_vector)
+                print("[DEBUG] Query embedding complete.")
+            except Exception as e:
+                print(f"[ERROR] Failed to embed query: {e}")
+                fallback_reason = "query_embedding_failed"
+
+            # --------------------------------------------------
+            # Step 4.2: Search FAISS
+            # --------------------------------------------------
+            if fallback_reason is None:
+                try:
+                    k = TOP_K
+                    print(f"[DEBUG] Running FAISS search with TOP_K={k} ...")
+                    D, I = FAISS_INDEX.search(query_vector, k)
+                    print("[DEBUG] FAISS search complete.")
+                    print(f"[DEBUG] Raw FAISS distances = {D}")
+                    print(f"[DEBUG] Raw FAISS indices   = {I}")
+                except Exception as e:
+                    print(f"[ERROR] FAISS search failed: {e}")
+                    fallback_reason = "faiss_search_failed"
+
+            # --------------------------------------------------
+            # Step 4.3: Build raw_top_chunks BEFORE class filter
+            # --------------------------------------------------
+            if fallback_reason is None:
+                raw_top_chunks = []
+                for idx, score in zip(I[0], D[0]):
+                    if idx < 0 or idx >= len(FAISS_METADATA):
+                        continue
+
+                    chunk_meta = FAISS_METADATA[idx].copy()
+                    chunk_meta["score"] = float(score)
+                    raw_top_chunks.append(chunk_meta)
+
+                print(f"[DEBUG] raw_top_chunks BEFORE class filter: {len(raw_top_chunks)}")
+
+                print("\n================ RAW TOP CHUNKS DEBUG ================")
+                print(f"[DEBUG] Query: {query}")
+                for i, c in enumerate(raw_top_chunks, start=1):
+                    print(f"\n--- RAW TOP CHUNK #{i} ---")
+                    print(f"pdf_name    = {c.get('pdf_name')}")
+                    print(f"page_number = {c.get('page_number')}")
+                    print(f"chunk_index = {c.get('chunk_index')}")
+                    print(f"pdf_link    = {c.get('pdf_link')}")
+                    print(f"score       = {c.get('score')}")
+                    chunk_text = c.get("chunk_text", "")
+                    print(f"chunk_text  = {chunk_text[:1500]}")
+                print("======================================================\n")
+
+                # --------------------------------------------------
+                # TEMP DEBUG: Disable class filtering completely
+                # --------------------------------------------------
+                top_chunks = raw_top_chunks.copy()
+                print("[DEBUG] TEMP: Skipping class-name filtering.")
+                print(f"[DEBUG] top_chunks assigned directly from raw_top_chunks.")
+                print(f"[DEBUG] top_chunks count after TEMP skip = {len(top_chunks)}")
+            # --------------------------------------------------
+            # Step 4.4: Filter raw chunks by class_name
+            # --------------------------------------------------
+            #if fallback_reason is None:
+             #   if class_list:
+              ##     for c in raw_top_chunks:
+                #        pdf_name = normalize_pdf_name(c.get("pdf_name", ""))
+                 #       matched = matches_class(pdf_name, class_list)
+######                   if matched:
+      #                      filtered_chunks.append(c)
+#
+ #                   top_chunks = filtered_chunks
+  #              else:
+   #                 top_chunks = raw_top_chunks
+
+    #            print(f"[DEBUG] top_chunks AFTER class filter: {len(top_chunks)}")
+
+     #           if raw_top_chunks and not top_chunks:
+      #              fallback_reason = "all_matches_removed_by_class_filter"
+            print(f"[DEBUG] top_chunks BEFORE class filter: {len(top_chunks)}")
+            print("\n================ TOP CHUNKS DEBUG ================")
+            print(f"[DEBUG] Query: {query}")
+
+            for i, c in enumerate(top_chunks, start=1):
+                print(f"\n--- TOP CHUNK #{i} ---")
+                print(f"pdf_name    = {c.get('pdf_name')}")
+                print(f"page_number = {c.get('page_number')}")
+                print(f"chunk_index = {c.get('chunk_index')}")
+                print(f"pdf_link    = {c.get('pdf_link')}")
+                print(f"score       = {c.get('score')}")
+                chunk_text = c.get("chunk_text", "")
+                print(f"chunk_text  = {chunk_text[:1500]}")
+            print("==================================================\n")
+
+            # --------------------------------------------------
+            # TEMP DEBUG: Disable class-based filtering
+            # --------------------------------------------------
+            print("[DEBUG] TEMP: Skipping class-name filtering for FAISS chunks.")
+            print(f"[DEBUG] class_list that would have been used = {class_list}")
+            print(f"[DEBUG] top_chunks count after skipping class filter = {len(top_chunks)}")
+            # --------------------------------------------------
+            # Step 4.5: Sort final chunks
+            # --------------------------------------------------
+            if top_chunks:
+                top_chunks = sorted(top_chunks, key=lambda x: x["score"], reverse=True)[:TOP_K]
+
+                print("\n========== FILTERED TOP CHUNKS DEBUG ==========")
+                for i, c in enumerate(top_chunks[:3], 1):
+                    print(f"\n--- Filtered Chunk {i} ---")
+                    for meta_key, meta_val in c.items():
+                        print(f"{meta_key}: {meta_val}")
+                print("===============================================\n")
+
         else:
-            top_chunks = []  # fallback if FAISS not initialized
+            top_chunks = []
+            raw_top_chunks = []
+            fallback_reason = "faiss_unavailable"
 
-     
-        if not top_chunks:
-            use_gpt_only = True
+    else:
+        top_chunks = []
+        raw_top_chunks = []
+        if not pdf_files:
+            fallback_reason = "no_pdf_files_for_context_search"
+        elif use_context_only:
+            fallback_reason = "use_context_only_enabled"
 
-        
+    # ------------------ Step 4.6: Decide whether GPT fallback is needed ------------------
+    if not top_chunks:
+        use_gpt_only = True
 
-        # Build context string
-        context_texts_str = "\n".join(
-            f"PDF: {c.get('pdf_name','N/A')} (Page {c.get('page_number','N/A')})\n{c.get('chunk_text','')}"
-            for c in top_chunks
-        )
+    print(f"[DEBUG] raw_top_chunks final count = {len(raw_top_chunks)}")
+    print(f"[DEBUG] top_chunks final count     = {len(top_chunks)}")
+    print(f"[DEBUG] use_gpt_only              = {use_gpt_only}")
+    print(f"[DEBUG] fallback_reason           = {fallback_reason}")
+    print("================ ACADEMY RETRIEVAL DEBUG END ================\n")
+
+    # ------------------ Step 4.7: Build context string ------------------
+    context_texts_str = "\n".join(
+        f"PDF: {c.get('pdf_name', 'N/A')} (Page {c.get('page_number', 'N/A')})\n{c.get('chunk_text', '')}"
+        for c in top_chunks
+    )
 
     # ------------------ Step 5: Prepare GPT prompt ------------------
     reasoning_instruction = {
@@ -4309,25 +4873,55 @@ Guidelines:
         pdf_metadata = f"[PDF used: {top_doc.get('pdf_name','N/A')} (Page {top_doc.get('page_number','N/A')})]"
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
-    # ------------------ Step 9: Prepare final results ------------------
-    used_pdfs = []
+        # ------------------ Step 9: Prepare final results ------------------
+        used_pdfs = []
 
-    for c in top_chunks:
-        pdf_link = c.get("pdf_link")
-        if not pdf_link:
-            continue
+        if source_name == "Academy Answer" and top_chunks:
+            top_doc = top_chunks[0]
+            top_pdf_name = normalize_pdf_name(top_doc.get("pdf_name", ""))
+            top_page = top_doc.get("page_number")
 
-        file_id = extract_drive_file_id(pdf_link)
-        if not file_id:
-            continue
+            print("\n================ PDF LINK BUILD DEBUG START ================")
+            print(f"[DEBUG] top_doc pdf_name   = {top_doc.get('pdf_name')}")
+            print(f"[DEBUG] normalized name   = {top_pdf_name}")
+            print(f"[DEBUG] top_doc page      = {top_page}")
+            print(f"[DEBUG] real_student_id   = {real_student_id}")
+            print(f"[DEBUG] pdf_files count   = {len(pdf_files)}")
 
-        used_pdfs.append(generate_backend_pdf_url(user_id, file_id))
+            matched_pdf = None
 
-    results.append({
-        "name": f"**{source_name}**",
-        "snippet": answer_text,
-        "links": used_pdfs if source_name == "Academy Answer" else []
-    })
+            for pdf in pdf_files:
+                pdf_name_from_list = normalize_pdf_name(pdf.get("name", ""))
+                print(f"[DEBUG] comparing against pdf_files name = {pdf_name_from_list}")
+
+                if pdf_name_from_list == top_pdf_name:
+                    matched_pdf = pdf
+                    break
+
+            if matched_pdf:
+                file_id = matched_pdf.get("id")
+                backend_url = f"{BACKEND_PUBLIC_BASE_URL}/student-pdf?student_id={real_student_id}&file_id={file_id}"
+
+                # Optional page param if your viewer supports it
+                if top_page:
+                    backend_url += f"&page={top_page}"
+
+                used_pdfs.append(backend_url)
+
+                print("[DEBUG] Matched PDF for academy source link")
+                print(f"[DEBUG] matched_pdf name = {matched_pdf.get('name')}")
+                print(f"[DEBUG] matched_pdf id   = {file_id}")
+                print(f"[DEBUG] backend_url      = {backend_url}")
+            else:
+                print("[WARNING] Could not match top chunk pdf_name against pdf_files, so no PDF link will be attached.")
+
+            print("================ PDF LINK BUILD DEBUG END ================\n")
+
+        results.append({
+            "name": f"**{source_name}**",
+            "snippet": answer_text,
+            "links": used_pdfs if source_name == "Academy Answer" else []
+        })
 
     # ------------------ Step 10: Update user context ------------------
     #append_to_user_context(user_id, "user", query)
@@ -4653,6 +5247,8 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
     Load a FAISS vector store from GCS directly into memory.
     Handles docstore tuples or dict/InMemoryDocstore.
     """
+    gcs_prefix = gcs_prefix.replace("\\", "/")
+
     print(f"\n[DEBUG][GCS-LOAD] ======== Starting load_vectorstore_from_gcs_in_memory ========")
     print(f"[DEBUG][GCS-LOAD] Prefix: {gcs_prefix}")
 
@@ -4811,51 +5407,211 @@ def load_vectorstore_from_gcs_in_memory(gcs_prefix: str, embeddings: OpenAIEmbed
 def normalize_pdf_name(name: str) -> str:
     return name.lower().replace(".pdf.pdf", ".pdf").replace("- ", "-").strip()
 
+from time import perf_counter
+from sqlalchemy.orm import load_only
 
 @app.post("/admin/initialize_faiss")
 def initialize_faiss(db: Session = Depends(get_db)):
     """
-    Reads embeddings from the database and initializes a FAISS index in memory.
+    Stream embeddings from DB, rebuild FAISS in memory, and log progress so we
+    can tell whether it is genuinely working slowly or actually stuck.
     """
     global FAISS_INDEX, FAISS_METADATA
 
+    print("\n================ INITIALIZE FAISS START ================", flush=True)
+    t0 = perf_counter()
+
     try:
-        all_embeddings = db.query(Embedding).all()
-        if not all_embeddings:
+        # --------------------------------------------------
+        # Step 1: Count rows first
+        # --------------------------------------------------
+        print("[STEP 1] Counting embeddings in DB...", flush=True)
+        count_start = perf_counter()
+        total_embeddings = db.query(Embedding).count()
+        print(
+            f"[STEP 1 DONE] Total embeddings in DB: {total_embeddings} "
+            f"(took {perf_counter() - count_start:.2f}s)",
+            flush=True
+        )
+
+        if total_embeddings == 0:
             raise HTTPException(status_code=404, detail="No embeddings found in DB.")
 
-        # Convert embeddings to NumPy array
-        vectors = np.array([e.embedding_vector for e in all_embeddings], dtype='float32')
+        # --------------------------------------------------
+        # Step 2: Stream only needed columns in batches
+        # --------------------------------------------------
+        print("[STEP 2] Streaming embeddings from DB in batches...", flush=True)
+        stream_start = perf_counter()
 
-        # Extract metadata for each embedding
-        FAISS_METADATA = [
-            {
-                "pdf_name": normalize_pdf_name(e.pdf_name),  # normalize here
+        query = (
+            db.query(Embedding)
+            .options(
+                load_only(
+                    Embedding.pdf_name,
+                    Embedding.class_name,
+                    Embedding.page_number,
+                    Embedding.chunk_index,
+                    Embedding.pdf_link,
+                    Embedding.chunk_text,
+                    Embedding.embedding_vector,
+                )
+            )
+            .yield_per(200)
+        )
+
+        vectors_list = []
+        metadata_list = []
+        processed = 0
+
+        for e in query:
+            vectors_list.append(e.embedding_vector)
+            metadata_list.append({
+                "pdf_name": normalize_pdf_name(e.pdf_name),
                 "class_name": e.class_name,
                 "page_number": e.page_number,
                 "chunk_index": e.chunk_index,
                 "pdf_link": e.pdf_link,
                 "chunk_text": e.chunk_text
-            }
-            for e in all_embeddings
-        ]
+            })
 
+            processed += 1
 
-        # Build FAISS index
-        d = vectors.shape[1]  # embedding dimension
-        FAISS_INDEX = faiss.IndexFlatIP(d)
-        faiss.normalize_L2(vectors)  # normalize for cosine similarity
-        FAISS_INDEX.add(vectors)
+            # Show the first row shape/details once for sanity
+            if processed == 1:
+                first_vec_len = len(e.embedding_vector) if e.embedding_vector is not None else None
+                print("[STEP 2 SAMPLE] First embedding row:", flush=True)
+                print(f"    pdf_name      = {e.pdf_name}", flush=True)
+                print(f"    class_name    = {e.class_name}", flush=True)
+                print(f"    page_number   = {e.page_number}", flush=True)
+                print(f"    chunk_index   = {e.chunk_index}", flush=True)
+                print(f"    vector_type   = {type(e.embedding_vector)}", flush=True)
+                print(f"    vector_length = {first_vec_len}", flush=True)
 
-        print(f"[DEBUG] FAISS index initialized with {len(all_embeddings)} embeddings.")
+            if processed % 200 == 0:
+                print(
+                    f"[STEP 2 PROGRESS] Processed {processed}/{total_embeddings} embeddings "
+                    f"({perf_counter() - stream_start:.2f}s elapsed)",
+                    flush=True
+                )
 
-        return {"message": "FAISS index initialized", "num_embeddings": len(all_embeddings)}
+        print(
+            f"[STEP 2 DONE] Finished streaming {processed} embeddings "
+            f"(took {perf_counter() - stream_start:.2f}s)",
+            flush=True
+        )
+
+        if processed != total_embeddings:
+            print(
+                f"[WARN] Count mismatch: count()={total_embeddings}, streamed={processed}",
+                flush=True
+            )
+
+        # --------------------------------------------------
+        # Step 3: Convert to NumPy
+        # --------------------------------------------------
+        print("[STEP 3] Converting vectors to NumPy array...", flush=True)
+        np_start = perf_counter()
+
+        vectors = np.array(vectors_list, dtype="float32")
+
+        print(
+            f"[STEP 3 DONE] NumPy array created in {perf_counter() - np_start:.2f}s",
+            flush=True
+        )
+        print(f"    vectors.shape = {vectors.shape}", flush=True)
+        print(f"    vectors.dtype = {vectors.dtype}", flush=True)
+
+        if len(vectors.shape) != 2:
+            raise ValueError(
+                f"Embedding vectors array has invalid shape {vectors.shape}. "
+                f"Expected 2D array like (num_embeddings, embedding_dim)."
+            )
+
+        if vectors.shape[0] == 0:
+            raise ValueError("No vectors available after conversion.")
+
+        # --------------------------------------------------
+        # Step 4: Create FAISS index
+        # --------------------------------------------------
+        d = vectors.shape[1]
+        print(f"[STEP 4] Creating FAISS index with dimension d={d}...", flush=True)
+        faiss_create_start = perf_counter()
+
+        temp_index = faiss.IndexFlatIP(d)
+
+        print(
+            f"[STEP 4 DONE] FAISS index object created in "
+            f"{perf_counter() - faiss_create_start:.2f}s",
+            flush=True
+        )
+
+        # --------------------------------------------------
+        # Step 5: Normalize vectors
+        # --------------------------------------------------
+        print("[STEP 5] Normalizing vectors for cosine similarity...", flush=True)
+        norm_start = perf_counter()
+
+        faiss.normalize_L2(vectors)
+
+        print(
+            f"[STEP 5 DONE] Vector normalization complete in "
+            f"{perf_counter() - norm_start:.2f}s",
+            flush=True
+        )
+
+        # --------------------------------------------------
+        # Step 6: Add vectors to FAISS
+        # --------------------------------------------------
+        print("[STEP 6] Adding vectors to FAISS index...", flush=True)
+        add_start = perf_counter()
+
+        temp_index.add(vectors)
+
+        print(
+            f"[STEP 6 DONE] Added {temp_index.ntotal} vectors to FAISS "
+            f"in {perf_counter() - add_start:.2f}s",
+            flush=True
+        )
+
+        # --------------------------------------------------
+        # Step 7: Swap globals only after success
+        # --------------------------------------------------
+        print("[STEP 7] Updating in-memory globals...", flush=True)
+        FAISS_INDEX = temp_index
+        FAISS_METADATA = metadata_list
+        print(
+            f"[STEP 7 DONE] FAISS_INDEX and FAISS_METADATA updated "
+            f"({len(FAISS_METADATA)} metadata rows)",
+            flush=True
+        )
+
+        total_time = perf_counter() - t0
+        print("[SUCCESS] FAISS index initialized successfully.", flush=True)
+        print(f"          Total embeddings indexed: {temp_index.ntotal}", flush=True)
+        print(f"          Total time: {total_time:.2f}s", flush=True)
+        print("================ INITIALIZE FAISS END ================\n", flush=True)
+
+        return {
+            "message": "FAISS index initialized successfully",
+            "num_embeddings": temp_index.ntotal,
+            "dimension": d,
+            "total_time_seconds": round(total_time, 2),
+        }
+
+    except HTTPException as http_err:
+        print(f"[HTTP ERROR] {http_err.detail}", flush=True)
+        print("================ INITIALIZE FAISS FAILED ================\n", flush=True)
+        raise http_err
 
     except Exception as e:
-        print(f"[ERROR] Failed to initialize FAISS index: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to initialize FAISS index: {str(e)}")
-     
-
+        import traceback
+        print(f"[ERROR] Failed to initialize FAISS index: {str(e)}", flush=True)
+        traceback.print_exc()
+        print("================ INITIALIZE FAISS FAILED ================\n", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to initialize FAISS index: {str(e)}"
+        )
 
 @app.post("/admin/create_vectorstores")
 async def create_vectorstores():
@@ -4919,17 +5675,30 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
             pdf_name = pdf.get("name")
             pdf_path = pdf.get("path")
             pdf_base_name = pdf_name.rsplit(".", 1)[0]
-            parent_folder = os.path.dirname(pdf_path)
-            gcs_prefix = os.path.join(parent_folder, f"vectorstore_{pdf_base_name}") + "/"
+
+            parent_folder = pdf_path.rsplit("/", 1)[0] if "/" in pdf_path else ""
+            gcs_prefix = f"{parent_folder}/vectorstore_{pdf_base_name}/".replace("\\", "/")
 
             print(f"\n[DEBUG] Processing PDF {pdf_idx}/{len(all_pdfs)}: {pdf_name}")
             print(f"[DEBUG] Loading vector store from GCS: {gcs_prefix}")
+
+            try:
+                prefix_blobs = list(gcs_bucket.list_blobs(prefix=gcs_prefix, max_results=10))
+                print(f"[DEBUG] blob count under prefix = {len(prefix_blobs)}")
+                for b in prefix_blobs:
+                    print(f"    [PREFIX BLOB] {b.name}")
+            except Exception as e:
+                print(f"[ERROR] Failed listing prefix blobs: {e}")
+
+            print("============================================================\n")
 
             try:
                 vs = load_vectorstore_from_gcs_in_memory(gcs_prefix, embeddings_model)
             except Exception as e:
                 print(f"[WARNING] Could not load vector store for PDF {pdf_name}: {e}")
                 continue
+
+            
 
             # Step 2: Iterate over docstore items
             if hasattr(vs.docstore, "_dict"):
