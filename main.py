@@ -2,6 +2,8 @@ import random
 import time
 from dotenv import load_dotenv
 from typing import Optional, List, Dict
+from typing import Literal
+
 import pandas as pd
 from cachetools import TTLCache
 import re 
@@ -158,6 +160,11 @@ openai_client = OpenAI(
 
 
 
+FRONTEND_PUBLIC_BASE_URL = os.getenv(
+    "FRONTEND_PUBLIC_BASE_URL",
+    "http://localhost:3000"
+).rstrip("/")
+
 
 # -----------------------------
 # Google Drive Setup
@@ -298,6 +305,22 @@ all_pdfs = []
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
+class ChatbotLoginSettings(Base):
+    __tablename__ = "chatbot_login_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    login_mode = Column(String, nullable=False, default="otp_only")
+
+
+class ChatbotLoginSettingsResponse(BaseModel):
+    login_mode: Literal["otp_only", "id_only", "both"]
+
+    class Config:
+        from_attributes = True
+
+
+class ChatbotLoginSettingsUpdate(BaseModel):
+    login_mode: Literal["otp_only", "id_only", "both"]
 
 class AdminUser(Base):
     __tablename__ = "admin_users"
@@ -639,6 +662,46 @@ def calculate_openai_cost(model_name: str, prompt_tokens: int, completion_tokens
 # API Endpoints
 
 # -----------------------------
+# -----------------------------
+# Helper: get or create settings row
+# -----------------------------
+def get_or_create_chatbot_login_settings(db: Session):
+    settings = db.query(ChatbotLoginSettings).first()
+
+    if not settings:
+        settings = ChatbotLoginSettings(login_mode="otp_only")
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+
+    return settings
+
+
+# -----------------------------
+# GET chatbot login settings
+# -----------------------------
+@app.get("/chatbot-login-settings", response_model=ChatbotLoginSettingsResponse)
+def get_chatbot_login_settings(db: Session = Depends(get_db)):
+    settings = get_or_create_chatbot_login_settings(db)
+    return settings
+
+
+# -----------------------------
+# PUT chatbot login settings
+# -----------------------------
+@app.put("/chatbot-login-settings", response_model=ChatbotLoginSettingsResponse)
+def update_chatbot_login_settings(
+    payload: ChatbotLoginSettingsUpdate,
+    db: Session = Depends(get_db),
+):
+    settings = get_or_create_chatbot_login_settings(db)
+
+    settings.login_mode = payload.login_mode
+
+    db.commit()
+    db.refresh(settings)
+
+    return settings
 @app.get("/chatbot-current-term")
 def get_chatbot_current_term(
     db: Session = Depends(get_db)
@@ -3504,6 +3567,7 @@ def get_allowed_pdfs_for_student(student_id: str, db: Session):
 
     print("========== GET ALLOWED PDFS END ==========\n")
     return result
+
 @app.get("/debug/student-allowed-pdfs")
 def debug_student_allowed_pdfs(
     student_id: str,
@@ -3611,6 +3675,8 @@ async def student_pdf_page(
 
     pdf_list = allowed_data.get("files", [])
     allowed_file_ids = {pdf["id"] for pdf in pdf_list}
+    print("[DEBUG PAGE] allowed_file_ids =", allowed_file_ids)
+    print("[DEBUG PAGE] requested file_id =", file_id)
 
     if file_id not in allowed_file_ids:
         print("ACCESS DENIED: file not allowed for this student")
@@ -3683,6 +3749,7 @@ async def student_pdf_page(
             status_code=500,
             detail="Failed to render PDF page."
         )
+
 @app.get("/student-pdf-search")
 async def student_pdf_search(
     student_id: str,
@@ -3815,6 +3882,65 @@ async def student_pdf_search(
             status_code=500,
             detail="Failed to search inside the booklet."
         )
+@app.get("/student-pdf-meta")
+async def student_pdf_meta(
+    student_id: str,
+    file_id: str,
+    db: Session = Depends(get_db)
+):
+    print("\n========== STUDENT PDF META ==========")
+    print(f"student_id = {student_id}")
+    print(f"file_id    = {file_id}")
+
+    # ---------------- Permission check ----------------
+    allowed_data = get_allowed_pdfs_for_student(
+        student_id=student_id,
+        db=db
+    )
+
+    if not allowed_data:
+        raise HTTPException(
+            status_code=404,
+            detail="No allowed PDFs found for this student."
+        )
+
+    pdf_list = allowed_data.get("files", [])
+    allowed_file_ids = {pdf["id"] for pdf in pdf_list}
+    print("[DEBUG META] allowed_file_ids =", allowed_file_ids)
+    print("[DEBUG META] requested file_id =", file_id)
+
+    if file_id not in allowed_file_ids:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to access this booklet."
+        )
+
+    # ---------------- Load PDF ----------------
+    try:
+        pdf_bytes = get_cached_pdf_bytes(file_id)
+
+        if pdf_bytes is None:
+            print(f"[PDF CACHE MISS] Downloading file {file_id}")
+            request = drive_service.files().get_media(fileId=file_id)
+            pdf_bytes = request.execute()
+            set_cached_pdf_bytes(file_id, pdf_bytes)
+        else:
+            print(f"[PDF CACHE HIT] Using cached PDF {file_id}")
+
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+        return {
+            "file_id": file_id,
+            "total_pages": len(pdf_doc)
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Failed loading PDF metadata: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load PDF metadata."
+        )
+
 @app.get("/student-pdf")
 async def student_pdf(
     student_id: str,
@@ -4445,6 +4571,12 @@ async def search_pdfs(
     print(f"        student_id      = {student.student_id}")
     print(f"        class_name DB   = {student.class_name}")
     print(f"        student_year DB = {student.student_year}")
+    allowed_pdf_data = get_allowed_pdfs_for_student(real_student_id, db)
+    allowed_pdf_files = allowed_pdf_data.get("files", []) if allowed_pdf_data else []
+
+    print("[DEBUG] Allowed PDFs for student:")
+    for apdf in allowed_pdf_files:
+        print(f"        allowed_pdf name = {apdf.get('name')}, id = {apdf.get('id')}")
     # ------------------ Step 1: Prepare PDF list ------------------
     if not pdf_listing_done:
         print("[INFO] Fetching PDF list from Google Drive for the first time...")
@@ -4530,20 +4662,15 @@ async def search_pdfs(
         print(f"[DEBUG] Extracted query_week = {query_week}")
 
         filtered_pdfs = []
-        for pdf in pdf_files:
-            path_lower = pdf.get("path", "").lower()
-            name_lower = pdf["name"].lower()
-
-            print("--------------------------------------------------")
-            print(f"[DEBUG] Checking PDF: {pdf['name']}")
-            print(f"[DEBUG] path_lower = {path_lower}")
-            print(f"[DEBUG] name_lower = {name_lower}")
+        for pdf in allowed_pdf_files:
+            name_lower = pdf.get("name", "").lower()
 
             if query_year and not (
-                f"year {query_year}" in path_lower or
-                f"year_{query_year}" in path_lower or
+                f"year {query_year}" in name_lower or
+                f"year_{query_year}" in name_lower or
                 f"y{query_year}" in name_lower
             ):
+                
                 print("[DEBUG] Skipped بسبب year mismatch")
                 continue
 
@@ -4562,11 +4689,22 @@ async def search_pdfs(
         print(f"[DEBUG] filtered_pdfs count = {len(filtered_pdfs)}")
 
         if filtered_pdfs:
-            pdf_urls_to_send = [
-                f"{BACKEND_PUBLIC_BASE_URL}/student-pdf?student_id={real_student_id}&file_id={pdf['id']}"
-                for pdf in filtered_pdfs
-            ]
-            answer_text = f"Here are the PDFs you requested:\n" + "\n".join(pdf_urls_to_send)
+            pdf_urls_to_send = []
+            display_pdf_lines = []
+
+            for pdf in filtered_pdfs:
+                frontend_pdf_url = (
+                    f"{FRONTEND_PUBLIC_BASE_URL}/pdf-viewer"
+                    f"?student_id={real_student_id}&file_id={pdf['id']}"
+                )
+
+                pdf_name = pdf.get("name", "booklet.pdf")
+                display_pdf_url = f"gekidsacademy.com.au/{pdf_name}"
+
+                pdf_urls_to_send.append(frontend_pdf_url)
+                display_pdf_lines.append(display_pdf_url)
+
+            answer_text = "Here are the PDFs you requested:\n" + "\n".join(display_pdf_lines)
             print("[DEBUG] Returning PDF response")
         else:
             answer_text = "No PDFs found."
@@ -4866,7 +5004,7 @@ Guidelines:
             source_name = "Academy Answer"
         else:
             source_name = "GPT Answer"
-
+    used_pdfs = []
     # ------------------ Step 8: Append PDF metadata once ------------------
     if source_name == "Academy Answer" and top_chunks:
         top_doc = top_chunks[0]  # dict
@@ -4874,7 +5012,7 @@ Guidelines:
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
         # ------------------ Step 9: Prepare final results ------------------
-        used_pdfs = []
+        
 
         if source_name == "Academy Answer" and top_chunks:
             top_doc = top_chunks[0]
@@ -4890,9 +5028,9 @@ Guidelines:
 
             matched_pdf = None
 
-            for pdf in pdf_files:
+            for pdf in allowed_pdf_files:
                 pdf_name_from_list = normalize_pdf_name(pdf.get("name", ""))
-                print(f"[DEBUG] comparing against pdf_files name = {pdf_name_from_list}")
+                print(f"[DEBUG] comparing against allowed pdf name = {pdf_name_from_list}")
 
                 if pdf_name_from_list == top_pdf_name:
                     matched_pdf = pdf
@@ -4900,28 +5038,31 @@ Guidelines:
 
             if matched_pdf:
                 file_id = matched_pdf.get("id")
-                backend_url = f"{BACKEND_PUBLIC_BASE_URL}/student-pdf?student_id={real_student_id}&file_id={file_id}"
 
-                # Optional page param if your viewer supports it
+                frontend_url = (
+                    f"{FRONTEND_PUBLIC_BASE_URL}/pdf-viewer"
+                    f"?student_id={real_student_id}&file_id={file_id}"
+                )
+
                 if top_page:
-                    backend_url += f"&page={top_page}"
+                    frontend_url += f"&page={top_page}"
 
-                used_pdfs.append(backend_url)
+                used_pdfs.append(frontend_url)
 
                 print("[DEBUG] Matched PDF for academy source link")
                 print(f"[DEBUG] matched_pdf name = {matched_pdf.get('name')}")
                 print(f"[DEBUG] matched_pdf id   = {file_id}")
-                print(f"[DEBUG] backend_url      = {backend_url}")
+                print(f"[DEBUG] frontend_url     = {frontend_url}")
             else:
                 print("[WARNING] Could not match top chunk pdf_name against pdf_files, so no PDF link will be attached.")
 
             print("================ PDF LINK BUILD DEBUG END ================\n")
 
-        results.append({
+    results.append({
             "name": f"**{source_name}**",
             "snippet": answer_text,
             "links": used_pdfs if source_name == "Academy Answer" else []
-        })
+        })    
 
     # ------------------ Step 10: Update user context ------------------
     #append_to_user_context(user_id, "user", query)
