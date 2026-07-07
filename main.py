@@ -311,6 +311,136 @@ class ChatbotLoginSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     login_mode = Column(String, nullable=False, default="otp_only")
 
+class ChatbotMessage(Base):
+    __tablename__ = "chatbot_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    conversation_id = Column(
+        Integer,
+        ForeignKey("chatbot_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    # "user" or "assistant"
+    role = Column(String, nullable=False)
+
+    # actual message text
+    message_text = Column(Text, nullable=False)
+
+    # assistant metadata
+    source_name = Column(String, nullable=True)       # Academy Answer / GPT Answer
+    reasoning_level = Column(String, nullable=True)   # simple / medium / advanced
+    class_name = Column(String, nullable=True)
+
+    # optional PDF metadata if answer came from a booklet/pdf
+    pdf_name = Column(String, nullable=True)
+    pdf_page = Column(Integer, nullable=True)
+    pdf_file_id = Column(String, nullable=True)
+
+    # store returned links as JSON
+    response_links = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    conversation = relationship("ChatbotConversation", back_populates="messages")
+
+
+class ChatbotConversation(Base):
+    __tablename__ = "chatbot_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # one unique chat/session id
+    conversation_uuid = Column(
+        String,
+        unique=True,
+        nullable=False,
+        index=True,
+        default=lambda: str(uuid.uuid4())
+    )
+
+    # student / parent info copied at conversation start for easy admin filtering
+    student_id = Column(
+        String,
+        nullable=False,
+        index=True
+    )
+
+    student_name = Column(
+        String,
+        nullable=True
+    )
+
+    parent_email = Column(
+        String,
+        nullable=False,
+        index=True
+    )
+
+    class_name = Column(
+        String,
+        nullable=True
+    )
+
+    student_year = Column(
+        String,
+        nullable=True
+    )
+
+    center_code = Column(
+        String,
+        nullable=True
+    )
+
+    center_name = Column(
+        String,
+        nullable=True
+    )
+
+    started_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow
+    )
+
+    last_message_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow
+    )
+
+    message_count = Column(
+        Integer,
+        nullable=False,
+        default=0
+    )
+
+    status = Column(
+        String,
+        nullable=False,
+        default="active"
+    )
+
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow
+    )
+
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow
+    )
+
+    messages = relationship(
+        "ChatbotMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan"
+    )
+
 
 class ChatbotLoginSettingsResponse(BaseModel):
     login_mode: Literal["otp_only", "id_only", "both"]
@@ -1186,23 +1316,23 @@ def send_otp_endpoint(
         )
 
     # --------------------------------------------------
-    # Check Admin Users first
+    # Check Admin Users first (case-insensitive)
     # --------------------------------------------------
     admin = (
         db.query(AdminUser)
-        .filter(AdminUser.email == email)
+        .filter(func.lower(AdminUser.email) == email)
         .first()
     )
 
     # --------------------------------------------------
-    # If not found, check Students (Parent Email)
+    # If not found, check Students (Parent Email) case-insensitive
     # --------------------------------------------------
     student = None
 
     if not admin:
         student = (
             db.query(Student)
-            .filter(Student.parent_email == email)
+            .filter(func.lower(Student.parent_email) == email)
             .first()
         )
 
@@ -1213,10 +1343,10 @@ def send_otp_endpoint(
                 detail="Email not found"
             )
 
-        print(f"[DEBUG] Found student '{student.name}' with parent email {email}")
+        print(f"[DEBUG] Found student '{student.name}' with parent email {student.parent_email}")
 
     else:
-        print(f"[DEBUG] Found admin '{admin.full_name}' with email {email}")
+        print(f"[DEBUG] Found admin '{admin.full_name}' with email {admin.email}")
 
     # --------------------------------------------------
     # Generate OTP
@@ -1379,6 +1509,129 @@ class VerifyOTPRequest(BaseModel):
     email: str
     otp: str
 
+
+from fastapi import Query
+from sqlalchemy.orm import Session
+from sqlalchemy import desc, func
+
+from sqlalchemy import func
+
+@app.get("/admin/chatbot/conversations/{conversation_id}/messages")
+def get_chatbot_conversation_messages(
+    conversation_id: int,
+    db: Session = Depends(get_db)
+):
+    conversation = (
+        db.query(ChatbotConversation)
+        .filter(ChatbotConversation.id == conversation_id)
+        .first()
+    )
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = (
+        db.query(ChatbotMessage)
+        .filter(ChatbotMessage.conversation_id == conversation_id)
+        .order_by(ChatbotMessage.created_at.asc(), ChatbotMessage.id.asc())
+        .all()
+    )
+
+    return {
+        "conversation": {
+            "id": conversation.id,
+            "conversation_uuid": conversation.conversation_uuid,
+            "student_id": conversation.student_id,
+            "student_name": conversation.student_name,
+            "parent_email": conversation.parent_email,
+            "class_name": conversation.class_name,
+            "student_year": conversation.student_year,
+            "center_code": conversation.center_code,
+            "center_name": conversation.center_name,
+            "message_count": conversation.message_count,
+            "status": conversation.status,
+            "started_at": conversation.started_at.isoformat() if conversation.started_at else None,
+            "last_message_at": conversation.last_message_at.isoformat() if conversation.last_message_at else None,
+        },
+        "messages": [
+            {
+                "id": msg.id,
+                "role": msg.role,
+                "message_text": msg.message_text,
+                "source_name": msg.source_name,
+                "reasoning_level": msg.reasoning_level,
+                "class_name": msg.class_name,
+                "pdf_name": msg.pdf_name,
+                "pdf_page": msg.pdf_page,
+                "pdf_file_id": msg.pdf_file_id,
+                "response_links": msg.response_links or [],
+                "created_at": msg.created_at.isoformat() if msg.created_at else None,
+            }
+            for msg in messages
+        ]
+    }
+
+@app.get("/admin/chatbot/conversation-students")
+def get_chatbot_conversation_students(
+    date: str = Query(...),   # YYYY-MM-DD
+    db: Session = Depends(get_db)
+):
+    rows = (
+        db.query(
+            ChatbotConversation.student_id,
+            ChatbotConversation.student_name
+        )
+        .filter(func.date(ChatbotConversation.started_at) == date)
+        .distinct()
+        .order_by(ChatbotConversation.student_id.asc())
+        .all()
+    )
+
+    return [
+        {
+            "student_id": row.student_id,
+            "student_name": row.student_name
+        }
+        for row in rows
+    ]
+
+@app.get("/admin/chatbot/conversations")
+def get_chatbot_conversations(
+    date: str = Query(None),   # expected format: YYYY-MM-DD
+    student_id: str = Query(None),
+    db: Session = Depends(get_db)
+):
+    query = db.query(ChatbotConversation)
+
+    if date:
+        query = query.filter(func.date(ChatbotConversation.started_at) == date)
+
+    if student_id:
+        query = query.filter(ChatbotConversation.student_id == student_id)
+
+    conversations = (
+        query.order_by(desc(ChatbotConversation.last_message_at))
+        .all()
+    )
+
+    return [
+        {
+            "id": convo.id,
+            "conversation_uuid": convo.conversation_uuid,
+            "student_id": convo.student_id,
+            "student_name": convo.student_name,
+            "parent_email": convo.parent_email,
+            "class_name": convo.class_name,
+            "student_year": convo.student_year,
+            "center_code": convo.center_code,
+            "center_name": convo.center_name,
+            "message_count": convo.message_count,
+            "status": convo.status,
+            "started_at": convo.started_at.isoformat() if convo.started_at else None,
+            "last_message_at": convo.last_message_at.isoformat() if convo.last_message_at else None,
+        }
+        for convo in conversations
+    ]
 @app.post("/verify-otp")
 def verify_otp(
     data: VerifyOTPRequest,
@@ -4512,12 +4765,70 @@ async def student_pdf(
             status_code=500,
             detail="Failed to load booklet viewer."
         )
+def get_or_create_chatbot_conversation(db, conversation_uuid: str, student: Student):
+    conversation = (
+        db.query(ChatbotConversation)
+        .filter(ChatbotConversation.conversation_uuid == conversation_uuid)
+        .first()
+    )
+
+    if conversation:
+        return conversation
+
+    conversation = ChatbotConversation(
+        conversation_uuid=conversation_uuid,
+        student_id=student.student_id,
+        student_name=student.name,
+        parent_email=student.parent_email,
+        class_name=student.class_name,
+        student_year=student.student_year,
+        center_code=student.center_code,
+        center_name=student.center_name,
+        started_at=datetime.utcnow(),
+        last_message_at=datetime.utcnow(),
+        message_count=0,
+        status="active"
+    )
+
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+def save_chatbot_message(
+    db,
+    conversation_id: int,
+    role: str,
+    message_text: str,
+    source_name: str =None,
+    reasoning_level: str = None,
+    class_name: str = None,
+    pdf_name: str = None,
+    pdf_page: int = None,
+    pdf_file_id: str = None,
+    response_links=None
+):
+    msg = ChatbotMessage(
+        conversation_id=conversation_id,
+        role=role,
+        message_text=message_text,
+        source_name=source_name,
+        reasoning_level=reasoning_level,
+        class_name=class_name,
+        pdf_name=pdf_name,
+        pdf_page=pdf_page,
+        pdf_file_id=pdf_file_id,
+        response_links=response_links
+    )
+    db.add(msg)
+    return msg
 
 @app.get("/search")
 async def search_pdfs(
     query: str,
     reasoning: str,
     user_id: str,
+    conversation_uuid: str,
     class_name: str = None,
     db: Session = Depends(get_db)
 ):
@@ -4562,7 +4873,21 @@ async def search_pdfs(
             "snippet": "Unable to identify the student account for this request.",
             "links": []
         }])
-
+    student_year = student.student_year
+    
+    conversation = get_or_create_chatbot_conversation(
+        db=db,
+        conversation_uuid=conversation_uuid,
+        student=student
+    )
+    save_chatbot_message(
+        db=db,
+        conversation_id=conversation.id,
+        role="user",
+        message_text=query,
+        reasoning_level=reasoning,
+        class_name=class_name or student.class_name
+    )
     real_student_id = student.student_id
 
     print("[DEBUG] Student resolved for chatbot request:")
@@ -4719,6 +5044,23 @@ async def search_pdfs(
 
         append_to_user_context(user_id, "user", query)
         append_to_user_context(user_id, "assistant", answer_text)
+
+        save_chatbot_message(
+            db=db,
+            conversation_id=conversation.id,
+            role="assistant",
+            message_text=answer_text,
+            source_name="Academy Answer",
+            reasoning_level=reasoning,
+            class_name=class_name or student.class_name,
+            response_links=pdf_urls_to_send
+        )
+
+        conversation.last_message_at = datetime.utcnow()
+        conversation.message_count = (conversation.message_count or 0) + 2
+        conversation.updated_at = datetime.utcnow()
+
+        db.commit()
 
         print("================ PDF REQUEST DEBUG END ================\n")
         return JSONResponse(results)
@@ -4941,9 +5283,21 @@ async def search_pdfs(
 #- If the user asks for a resource mentioned but not provided, say you do not have access.
 ##- Prepend "[GPT answer]" if relying on your own understanding.
 #"""
+    row = db.execute(select(FranchiseLocation)).scalar_one_or_none()
+
+    country = ""
+    state = ""
+
+    if row:
+        country = row.country or ""
+        state = row.state or ""
+        print(f"Country: {country}, State: {state}")
+    else:
+        print("No row found in FranchiseLocation table.")
+
     if use_gpt_only or not top_chunks:
         gpt_prompt = f"""
-    You are an educational assistant.
+    You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
 
     Style:
     {reasoning_instruction}
@@ -4958,31 +5312,23 @@ async def search_pdfs(
     - Prepend "[GPT answer]".
     """
     else:
-        row = db.execute(select(FranchiseLocation)).scalar_one_or_none()
-        if row:
-           country = row.country
-           state = row.state
-           print(f"Country: {country}, State: {state}")
-        else:
-           print("No row found in FranchiseLocation table.")
-    
         gpt_prompt = f"""
-You are an assistant for {class_name} in {country} {state} . Follow the instructions below carefully.
+    You are an assistant for a {class_name} student in {student_year}, located in {country} {state}. Follow the instructions below carefully.
 
-Style: {reasoning_instruction}
+    Style:
+    {reasoning_instruction}
 
+    PDF Chunks:
+    {context_texts_str}
 
-PDF Chunks:
-{context_texts_str}
+    Question:
+    {query}
 
-Question:
-{query}
-
-Guidelines:
-1. Use PDF chunks if relevant.
-2. Do not invent facts.
-3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
-"""
+    Guidelines:
+    1. Use PDF chunks if relevant.
+    2. Do not invent facts.
+    3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
+    """
 
     # ------------------ Step 6: Call GPT ------------------
     answer_response = openai_client.chat.completions.create(
@@ -5005,69 +5351,92 @@ Guidelines:
         else:
             source_name = "GPT Answer"
     used_pdfs = []
-    # ------------------ Step 8: Append PDF metadata once ------------------
+    # ------------------ Step 8: Append PDF metadata + build PDF link ------------------
+    top_pdf_name = None
+    top_pdf_page = None
+    top_pdf_file_id = None
+    matched_pdf = None
+
     if source_name == "Academy Answer" and top_chunks:
-        top_doc = top_chunks[0]  # dict
-        pdf_metadata = f"[PDF used: {top_doc.get('pdf_name','N/A')} (Page {top_doc.get('page_number','N/A')})]"
+        top_doc = top_chunks[0]
+
+        # store PDF metadata for DB save later
+        top_pdf_name = top_doc.get("pdf_name")
+        top_pdf_page = top_doc.get("page_number")
+
+        # append PDF metadata to assistant answer
+        pdf_metadata = f"[PDF used: {top_pdf_name if top_pdf_name is not None else 'N/A'} (Page {top_pdf_page if top_pdf_page is not None else 'N/A'})]"
         answer_text = f"{answer_text}\n{pdf_metadata}"
 
-        # ------------------ Step 9: Prepare final results ------------------
-        
+        # build frontend PDF link for the top matched PDF
+        normalized_top_pdf_name = normalize_pdf_name(top_pdf_name or "")
+        top_page = top_pdf_page
 
-        if source_name == "Academy Answer" and top_chunks:
-            top_doc = top_chunks[0]
-            top_pdf_name = normalize_pdf_name(top_doc.get("pdf_name", ""))
-            top_page = top_doc.get("page_number")
+        print("\n================ PDF LINK BUILD DEBUG START ================")
+        print(f"[DEBUG] top_doc pdf_name   = {top_doc.get('pdf_name')}")
+        print(f"[DEBUG] normalized name   = {normalized_top_pdf_name}")
+        print(f"[DEBUG] top_doc page      = {top_page}")
+        print(f"[DEBUG] real_student_id   = {real_student_id}")
+        print(f"[DEBUG] allowed_pdf_files count = {len(allowed_pdf_files)}")
 
-            print("\n================ PDF LINK BUILD DEBUG START ================")
-            print(f"[DEBUG] top_doc pdf_name   = {top_doc.get('pdf_name')}")
-            print(f"[DEBUG] normalized name   = {top_pdf_name}")
-            print(f"[DEBUG] top_doc page      = {top_page}")
-            print(f"[DEBUG] real_student_id   = {real_student_id}")
-            print(f"[DEBUG] pdf_files count   = {len(pdf_files)}")
+        for pdf in allowed_pdf_files:
+            pdf_name_from_list = normalize_pdf_name(pdf.get("name", ""))
+            print(f"[DEBUG] comparing against allowed pdf name = {pdf_name_from_list}")
 
-            matched_pdf = None
+            if pdf_name_from_list == normalized_top_pdf_name:
+                matched_pdf = pdf
+                break
 
-            for pdf in allowed_pdf_files:
-                pdf_name_from_list = normalize_pdf_name(pdf.get("name", ""))
-                print(f"[DEBUG] comparing against allowed pdf name = {pdf_name_from_list}")
+        if matched_pdf:
+            top_pdf_file_id = matched_pdf.get("id")
 
-                if pdf_name_from_list == top_pdf_name:
-                    matched_pdf = pdf
-                    break
+            frontend_url = (
+                f"{FRONTEND_PUBLIC_BASE_URL}/pdf-viewer"
+                f"?student_id={real_student_id}&file_id={top_pdf_file_id}"
+            )
 
-            if matched_pdf:
-                file_id = matched_pdf.get("id")
+            if top_page:
+                frontend_url += f"&page={top_page}"
 
-                frontend_url = (
-                    f"{FRONTEND_PUBLIC_BASE_URL}/pdf-viewer"
-                    f"?student_id={real_student_id}&file_id={file_id}"
-                )
+            used_pdfs.append(frontend_url)
 
-                if top_page:
-                    frontend_url += f"&page={top_page}"
+            print("[DEBUG] Matched PDF for academy source link")
+            print(f"[DEBUG] matched_pdf name = {matched_pdf.get('name')}")
+            print(f"[DEBUG] matched_pdf id   = {top_pdf_file_id}")
+            print(f"[DEBUG] frontend_url     = {frontend_url}")
+        else:
+            print("[WARNING] Could not match top chunk pdf_name against allowed_pdf_files, so no PDF link will be attached.")
 
-                used_pdfs.append(frontend_url)
+        print("================ PDF LINK BUILD DEBUG END ================\n")
 
-                print("[DEBUG] Matched PDF for academy source link")
-                print(f"[DEBUG] matched_pdf name = {matched_pdf.get('name')}")
-                print(f"[DEBUG] matched_pdf id   = {file_id}")
-                print(f"[DEBUG] frontend_url     = {frontend_url}")
-            else:
-                print("[WARNING] Could not match top chunk pdf_name against pdf_files, so no PDF link will be attached.")
-
-            print("================ PDF LINK BUILD DEBUG END ================\n")
-
+    # ------------------ Step 9: Prepare final results ------------------
     results.append({
-            "name": f"**{source_name}**",
-            "snippet": answer_text,
-            "links": used_pdfs if source_name == "Academy Answer" else []
-        })    
-
+        "name": f"**{source_name}**",
+        "snippet": answer_text,
+        "links": used_pdfs if source_name == "Academy Answer" else []
+    })
     # ------------------ Step 10: Update user context ------------------
     #append_to_user_context(user_id, "user", query)
     #append_to_user_context(user_id, "assistant", answer_text)
+    save_chatbot_message(
+        db=db,
+        conversation_id=conversation.id,
+        role="assistant",
+        message_text=answer_text,
+        source_name=source_name,
+        reasoning_level=reasoning,
+        class_name=class_name or student.class_name,
+        pdf_name=top_pdf_name,
+        pdf_page=top_pdf_page,
+        pdf_file_id=top_pdf_file_id,
+        response_links=used_pdfs if source_name == "Academy Answer" else []
+    )
 
+    conversation.last_message_at = datetime.utcnow()
+    conversation.message_count = (conversation.message_count or 0) + 2
+    conversation.updated_at = datetime.utcnow()
+
+    db.commit()
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse(results)
 
