@@ -3,7 +3,7 @@ import time
 from dotenv import load_dotenv
 from typing import Optional, List, Dict
 from typing import Literal
-
+from zoneinfo import ZoneInfo
 import pandas as pd
 from cachetools import TTLCache
 import re 
@@ -93,6 +93,15 @@ FAISS_INDEX = None
 FAISS_METADATA = None
 #for creating user passwords
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+
+
+AU_TZ = ZoneInfo("Australia/Sydney")
+
+def australia_now():
+    return datetime.now(AU_TZ).replace(tzinfo=None)
+
 
  
 
@@ -342,7 +351,7 @@ class ChatbotMessage(Base):
     # store returned links as JSON
     response_links = Column(JSON, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=australia_now)
 
     conversation = relationship("ChatbotConversation", back_populates="messages")
 
@@ -402,13 +411,13 @@ class ChatbotConversation(Base):
     started_at = Column(
         DateTime,
         nullable=False,
-        default=datetime.utcnow
+        default=australia_now
     )
 
     last_message_at = Column(
         DateTime,
         nullable=False,
-        default=datetime.utcnow
+        default=australia_now
     )
 
     message_count = Column(
@@ -426,13 +435,13 @@ class ChatbotConversation(Base):
     created_at = Column(
         DateTime,
         nullable=False,
-        default=datetime.utcnow
+        default=australia_now
     )
 
     updated_at = Column(
         DateTime,
         nullable=False,
-        default=datetime.utcnow
+        default=australia_now
     )
 
     messages = relationship(
@@ -4775,6 +4784,8 @@ def get_or_create_chatbot_conversation(db, conversation_uuid: str, student: Stud
     if conversation:
         return conversation
 
+    now_au = australia_now()
+
     conversation = ChatbotConversation(
         conversation_uuid=conversation_uuid,
         student_id=student.student_id,
@@ -4784,8 +4795,10 @@ def get_or_create_chatbot_conversation(db, conversation_uuid: str, student: Stud
         student_year=student.student_year,
         center_code=student.center_code,
         center_name=student.center_name,
-        started_at=datetime.utcnow(),
-        last_message_at=datetime.utcnow(),
+        started_at=now_au,
+        last_message_at=now_au,
+        created_at=now_au,
+        updated_at=now_au,
         message_count=0,
         status="active"
     )
@@ -4800,7 +4813,7 @@ def save_chatbot_message(
     conversation_id: int,
     role: str,
     message_text: str,
-    source_name: str =None,
+    source_name: str = None,
     reasoning_level: str = None,
     class_name: str = None,
     pdf_name: str = None,
@@ -4818,10 +4831,12 @@ def save_chatbot_message(
         pdf_name=pdf_name,
         pdf_page=pdf_page,
         pdf_file_id=pdf_file_id,
-        response_links=response_links
+        response_links=response_links,
+        created_at=australia_now()
     )
     db.add(msg)
     return msg
+
 
 @app.get("/search")
 async def search_pdfs(
@@ -5056,9 +5071,11 @@ async def search_pdfs(
             response_links=pdf_urls_to_send
         )
 
-        conversation.last_message_at = datetime.utcnow()
+        now_au = australia_now()
+
+        conversation.last_message_at = now_au
         conversation.message_count = (conversation.message_count or 0) + 2
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = now_au
 
         db.commit()
 
@@ -5432,9 +5449,11 @@ async def search_pdfs(
         response_links=used_pdfs if source_name == "Academy Answer" else []
     )
 
-    conversation.last_message_at = datetime.utcnow()
+    now_au = australia_now()
+
+    conversation.last_message_at = now_au
     conversation.message_count = (conversation.message_count or 0) + 2
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = now_au
 
     db.commit()
     print("==================== SEARCH REQUEST END ====================\n")
