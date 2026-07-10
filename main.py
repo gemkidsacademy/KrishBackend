@@ -4862,11 +4862,11 @@ async def search_pdfs(
     interaction_count = len(user_contexts[user_id]) // 2
 
     if interaction_count >= MAX_INTERACTIONS:
-        return JSONResponse([{
-            "name": "**Academy Answer**",
-            "snippet": f"You have reached the maximum of {MAX_INTERACTIONS} interactions. Please contact support for further queries.",
+        return JSONResponse({
+            "source_name": "Academy Answer",
+            "answer_markdown": f"You have reached the maximum of {MAX_INTERACTIONS} interactions. Please contact support for further queries.",
             "links": []
-        }])
+        })
 
     #------------------ Step 0b: Check educational query ------------------
     #if not is_educational_query_openai(query, user_id=user_id, db=db):
@@ -4883,11 +4883,11 @@ async def search_pdfs(
 
     if not student:
         print(f"[ERROR] No student found for chatbot user_id={user_id}")
-        return JSONResponse([{
-            "name": "**Academy Answer**",
-            "snippet": "Unable to identify the student account for this request.",
+        return JSONResponse({
+            "source_name": "Academy Answer",
+            "answer_markdown": "Unable to identify the student account for this request.",
             "links": []
-        }])
+        })
     student_year = student.student_year
     
     conversation = get_or_create_chatbot_conversation(
@@ -5051,11 +5051,7 @@ async def search_pdfs(
             print("[DEBUG] No filtered PDFs found, returning 'No PDFs found.'")
 
         source_name = "Academy Answer"
-        results.append({
-            "name": f"**{source_name}**",
-            "snippet": answer_text,
-            "links": pdf_urls_to_send
-        })
+        
 
         append_to_user_context(user_id, "user", query)
         append_to_user_context(user_id, "assistant", answer_text)
@@ -5080,7 +5076,11 @@ async def search_pdfs(
         db.commit()
 
         print("================ PDF REQUEST DEBUG END ================\n")
-        return JSONResponse(results)
+        return JSONResponse({
+            "source_name": "Academy Answer",
+            "answer_markdown": answer_text,
+            "links": pdf_urls_to_send
+        })
 
     print("[DEBUG] PDF branch NOT entered")
     print("================ PDF REQUEST DEBUG END ================\n")
@@ -5316,35 +5316,53 @@ async def search_pdfs(
         gpt_prompt = f"""
     You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
 
-    Style:
-    {reasoning_instruction}
-
     Question:
     {query}
 
+    Reasoning style:
+    {reasoning_instruction}
+
     Instructions:
-    - Answer using your own knowledge.
-    - Do not mention previous conversation.
-    - If you are unsure, say so.
-    - Prepend "[GPT answer]".
+    - Answer in clean Markdown.
+    - Use clean Markdown with compact spacing. Avoid unnecessary blank lines between short sections.
+    - Write like a polished ChatGPT educational response.
+    - Use short introductory context before the main answer when helpful.
+    - Use headings, bullet points, numbered lists, and spacing where appropriate.
+    - If the user asks for questions, worksheets, quizzes, explanations, summaries, or study help, structure the response neatly instead of writing one dense paragraph.
+    - If the user asks for NSW Selective / OC / NAPLAN style material, match that exam style rather than giving generic school questions.
+    - Always consider you are responding to school-going children.
+    - Do not mention previous conversation unless explicitly asked.
+    - Do not prepend labels like [GPT answer].
+    - If you are unsure, say so clearly.
+
+    Additional instruction for educational content:
+    - If the user asks for multiple questions, format each question under its own numbered heading.
+    - If the user asks for explanation, use sections and bullet points.
+    - Avoid raw LaTeX unless necessary.
     """
     else:
         gpt_prompt = f"""
-    You are an assistant for a {class_name} student in {student_year}, located in {country} {state}. Follow the instructions below carefully.
-
-    Style:
-    {reasoning_instruction}
-
-    PDF Chunks:
-    {context_texts_str}
+    You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
 
     Question:
     {query}
 
-    Guidelines:
-    1. Use PDF chunks if relevant.
-    2. Do not invent facts.
-    3. Prepend "[PDF-based answer]" if using PDFs, else "[GPT answer]".
+    Reasoning style:
+    {reasoning_instruction}
+
+    Relevant PDF chunks:
+    {context_texts_str}
+
+    Instructions:
+    - Answer in clean Markdown.
+    - Use clean Markdown with compact spacing. Avoid unnecessary blank lines between short sections.
+    - Use the PDF chunks when they are relevant.
+    - If the answer comes from the PDF content, base the answer on that material and do not invent facts.
+    - Write like a polished ChatGPT educational response.
+    - Use headings, bullets, numbering, and whitespace for readability.
+    - Always consider you are responding to school-going children.
+    - Do not prepend labels like [PDF-based answer] or [GPT answer].
+    - If the PDF chunks are not enough, say so honestly rather than inventing.
     """
 
     # ------------------ Step 6: Call GPT ------------------
@@ -5363,10 +5381,7 @@ async def search_pdfs(
         source_name = "GPT Answer"
         answer_text = answer_text.replace("[GPT answer]", "", 1).strip()
     else:
-        if top_chunks and any(word in answer_text.lower() for word in ["page", "pdf", "worksheet"]):
-            source_name = "Academy Answer"
-        else:
-            source_name = "GPT Answer"
+        source_name = "Academy Answer" if top_chunks and not use_gpt_only else "GPT Answer"
     used_pdfs = []
     # ------------------ Step 8: Append PDF metadata + build PDF link ------------------
     top_pdf_name = None
@@ -5427,14 +5442,11 @@ async def search_pdfs(
         print("================ PDF LINK BUILD DEBUG END ================\n")
 
     # ------------------ Step 9: Prepare final results ------------------
-    results.append({
-        "name": f"**{source_name}**",
-        "snippet": answer_text,
-        "links": used_pdfs if source_name == "Academy Answer" else []
-    })
+    
     # ------------------ Step 10: Update user context ------------------
     #append_to_user_context(user_id, "user", query)
     #append_to_user_context(user_id, "assistant", answer_text)
+    final_links = used_pdfs if used_pdfs else []
     save_chatbot_message(
         db=db,
         conversation_id=conversation.id,
@@ -5457,7 +5469,11 @@ async def search_pdfs(
 
     db.commit()
     print("==================== SEARCH REQUEST END ====================\n")
-    return JSONResponse(results)
+    return JSONResponse({
+        "source_name": source_name,
+        "answer_markdown": answer_text,
+        "links": final_links
+    })
 
 
 @app.post("/api/users/bulk")
