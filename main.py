@@ -314,6 +314,9 @@ all_pdfs = []
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
+class GamifiedWelcomeQuoteResponse(BaseModel):
+    quote: str
+    author: str 
 class ChatbotLoginSettings(Base):
     __tablename__ = "chatbot_login_settings"
 
@@ -1528,21 +1531,32 @@ from sqlalchemy import func
 @app.get("/admin/chatbot/conversations/{conversation_id}/messages")
 def get_chatbot_conversation_messages(
     conversation_id: int,
+    center_code: str,
     db: Session = Depends(get_db)
 ):
+    # Ensure the conversation belongs to the logged-in centre
     conversation = (
         db.query(ChatbotConversation)
-        .filter(ChatbotConversation.id == conversation_id)
+        .filter(
+            ChatbotConversation.id == conversation_id,
+            ChatbotConversation.center_code == center_code
+        )
         .first()
     )
 
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found"
+        )
 
     messages = (
         db.query(ChatbotMessage)
         .filter(ChatbotMessage.conversation_id == conversation_id)
-        .order_by(ChatbotMessage.created_at.asc(), ChatbotMessage.id.asc())
+        .order_by(
+            ChatbotMessage.created_at.asc(),
+            ChatbotMessage.id.asc()
+        )
         .all()
     )
 
@@ -1559,8 +1573,16 @@ def get_chatbot_conversation_messages(
             "center_name": conversation.center_name,
             "message_count": conversation.message_count,
             "status": conversation.status,
-            "started_at": conversation.started_at.isoformat() if conversation.started_at else None,
-            "last_message_at": conversation.last_message_at.isoformat() if conversation.last_message_at else None,
+            "started_at": (
+                conversation.started_at.isoformat()
+                if conversation.started_at
+                else None
+            ),
+            "last_message_at": (
+                conversation.last_message_at.isoformat()
+                if conversation.last_message_at
+                else None
+            ),
         },
         "messages": [
             {
@@ -1574,14 +1596,107 @@ def get_chatbot_conversation_messages(
                 "pdf_page": msg.pdf_page,
                 "pdf_file_id": msg.pdf_file_id,
                 "response_links": msg.response_links or [],
-                "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                "created_at": (
+                    msg.created_at.isoformat()
+                    if msg.created_at
+                    else None
+                ),
             }
             for msg in messages
-        ]
+        ],
     }
+@app.post("/welcome-quote", response_model=GamifiedWelcomeQuoteResponse)
+def get_welcome_quote():
+    print("\n==============================")
+    print("WELCOME QUOTE")
+    print("==============================")
 
+    fallback_quotes = [
+        {
+            "quote": "Success is the sum of small efforts, repeated day in and day out.",
+            "author": "Robert Collier",
+        },
+        {
+            "quote": "Learning never exhausts the mind.",
+            "author": "Leonardo da Vinci",
+        },
+        {
+            "quote": "The beautiful thing about learning is that no one can take it away from you.",
+            "author": "B.B. King",
+        },
+        {
+            "quote": "Education is the passport to the future, for tomorrow belongs to those who prepare for it today.",
+            "author": "Malcolm X",
+        },
+        {
+            "quote": "The expert in anything was once a beginner.",
+            "author": "Helen Hayes",
+        },
+    ]
+
+    try:
+        prompt = """
+You are generating a welcome quote for a school student.
+
+Return exactly ONE short educational or inspirational quote suitable for students.
+
+Rules:
+- The quote must have a real author.
+- Do not invent authors.
+- Do not include any explanation.
+
+Return ONLY valid JSON in this exact format:
+
+{
+  "quote": "string",
+  "author": "string"
+}
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You generate short motivational educational quotes for students in strict JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                },
+            ],
+            temperature=0.8,
+        )
+
+        raw_content = response.choices[0].message.content.strip()
+
+        print("Raw GPT quote response:", raw_content)
+
+        parsed = json.loads(raw_content)
+
+        quote = (parsed.get("quote") or "").strip()
+        author = (parsed.get("author") or "").strip()
+
+        if not quote or not author:
+            raise ValueError("Quote or author missing in GPT response")
+
+        return GamifiedWelcomeQuoteResponse(
+            quote=quote,
+            author=author,
+        )
+
+    except Exception as e:
+        print("Error generating welcome quote:", str(e))
+
+        fallback = random.choice(fallback_quotes)
+
+        return GamifiedWelcomeQuoteResponse(
+            quote=fallback["quote"],
+            author=fallback["author"],
+        )
 @app.get("/admin/chatbot/conversation-students")
 def get_chatbot_conversation_students(
+    center_code: str,
     date: str = Query(...),   # YYYY-MM-DD
     db: Session = Depends(get_db)
 ):
@@ -1590,7 +1705,10 @@ def get_chatbot_conversation_students(
             ChatbotConversation.student_id,
             ChatbotConversation.student_name
         )
-        .filter(func.date(ChatbotConversation.started_at) == date)
+        .filter(
+            ChatbotConversation.center_code == center_code,
+            func.date(ChatbotConversation.started_at) == date
+        )
         .distinct()
         .order_by(ChatbotConversation.student_id.asc())
         .all()
@@ -1599,24 +1717,35 @@ def get_chatbot_conversation_students(
     return [
         {
             "student_id": row.student_id,
-            "student_name": row.student_name
+            "student_name": row.student_name,
         }
         for row in rows
     ]
 
 @app.get("/admin/chatbot/conversations")
 def get_chatbot_conversations(
+    center_code: str,
     date: str = Query(None),   # expected format: YYYY-MM-DD
     student_id: str = Query(None),
     db: Session = Depends(get_db)
 ):
-    query = db.query(ChatbotConversation)
+    # Always restrict data to the logged-in user's centre
+    query = (
+        db.query(ChatbotConversation)
+        .filter(ChatbotConversation.center_code == center_code)
+    )
 
+    # Optional date filter
     if date:
-        query = query.filter(func.date(ChatbotConversation.started_at) == date)
+        query = query.filter(
+            func.date(ChatbotConversation.started_at) == date
+        )
 
+    # Optional student filter
     if student_id:
-        query = query.filter(ChatbotConversation.student_id == student_id)
+        query = query.filter(
+            ChatbotConversation.student_id == student_id
+        )
 
     conversations = (
         query.order_by(desc(ChatbotConversation.last_message_at))
@@ -1636,8 +1765,16 @@ def get_chatbot_conversations(
             "center_name": convo.center_name,
             "message_count": convo.message_count,
             "status": convo.status,
-            "started_at": convo.started_at.isoformat() if convo.started_at else None,
-            "last_message_at": convo.last_message_at.isoformat() if convo.last_message_at else None,
+            "started_at": (
+                convo.started_at.isoformat()
+                if convo.started_at
+                else None
+            ),
+            "last_message_at": (
+                convo.last_message_at.isoformat()
+                if convo.last_message_at
+                else None
+            ),
         }
         for convo in conversations
     ]
