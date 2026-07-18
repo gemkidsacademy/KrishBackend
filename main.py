@@ -188,88 +188,6 @@ drive_service = build("drive", "v3", credentials=creds)
 #DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
 DEMO_FOLDER_ID = "1EweJn82tRvVD5DlHwdPKzc_uppXU5LKH"
 
-def log_drive_folder_hierarchy(root_folder_id: str):
-    """
-    Logs Google Drive folder hierarchy in the format:
-    Root
-      └── Class
-            └── Year
-                  └── Term
-    """
-
-    print("\n================ DRIVE FOLDER HIERARCHY ================\n")
-
-    def get_subfolders(parent_id: str):
-        try:
-            response = drive_service.files().list(
-                q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
-                spaces="drive",
-                fields="files(id, name)",
-                orderBy="name"
-            ).execute()
-            return response.get("files", [])
-        except HttpError as e:
-            print(f"ERROR fetching subfolders for parent {parent_id}: {e}")
-            return []
-
-    try:
-        # Root folder metadata
-        root_meta = drive_service.files().get(
-            fileId=root_folder_id,
-            fields="id,name"
-        ).execute()
-
-        print(f"ROOT: {root_meta.get('name')} ({root_meta.get('id')})\n")
-
-        # Level 1: Class folders
-        class_folders = get_subfolders(root_folder_id)
-
-        if not class_folders:
-            print("No class folders found under root.")
-            return
-
-        for class_folder in class_folders:
-            class_name = class_folder["name"]
-            class_id = class_folder["id"]
-
-            print(f"├── CLASS: {class_name} ({class_id})")
-
-            # Level 2: Year folders under class
-            year_folders = get_subfolders(class_id)
-
-            if not year_folders:
-                print("│   └── No year folders found")
-                continue
-
-            for year_folder in year_folders:
-                year_name = year_folder["name"]
-                year_id = year_folder["id"]
-
-                print(f"│   ├── YEAR: {year_name} ({year_id})")
-
-                # Level 3: Term folders under year
-                term_folders = get_subfolders(year_id)
-
-                if not term_folders:
-                    print("│   │   └── No term folders found")
-                    continue
-
-                for term_folder in term_folders:
-                    term_name = term_folder["name"]
-                    term_id = term_folder["id"]
-
-                    print(f"│   │   ├── TERM: {term_name} ({term_id})")
-
-        print("\n================ END OF DRIVE HIERARCHY ================\n")
-
-    except HttpError as e:
-        print("ERROR while reading Drive hierarchy")
-        print(str(e))
-
-
-print("==== Starting Drive access process ====")
-
-log_drive_folder_hierarchy(DEMO_FOLDER_ID)
 
 
 
@@ -2241,13 +2159,19 @@ def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Sessi
 
 from googleapiclient.errors import HttpError
 
+
+from googleapiclient.errors import HttpError
+
+
 def log_drive_folder_hierarchy(root_folder_id: str):
     """
-    Logs Google Drive folder hierarchy in the format:
+    Logs Google Drive hierarchy:
+
     Root
       └── Class
             └── Year
                   └── Term
+                        └── PDF files
     """
 
     print("\n================ DRIVE FOLDER HIERARCHY ================\n")
@@ -2257,67 +2181,138 @@ def log_drive_folder_hierarchy(root_folder_id: str):
             response = drive_service.files().list(
                 q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
                 spaces="drive",
-                fields="files(id, name)",
+                fields="files(id,name)",
                 orderBy="name"
             ).execute()
+
             return response.get("files", [])
+
         except HttpError as e:
             print(f"ERROR fetching subfolders for parent {parent_id}: {e}")
             return []
 
+    def get_files(parent_id: str):
+        """
+        Returns all non-folder files inside a Google Drive folder.
+        Handles pagination and prints everything it finds.
+        """
+
+        files = []
+        page_token = None
+
+        while True:
+
+            response = drive_service.files().list(
+                q=(
+                    f"'{parent_id}' in parents "
+                    "and mimeType != 'application/vnd.google-apps.folder' "
+                    "and trashed = false"
+                ),
+                spaces="drive",
+                fields="nextPageToken, files(id,name,mimeType,size)",
+                orderBy="name",
+                pageToken=page_token,
+            ).execute()
+
+            current_files = response.get("files", [])
+
+            files.extend(current_files)
+
+            page_token = response.get("nextPageToken")
+
+            if page_token is None:
+                break
+
+        print(f"\nFolder {parent_id}")
+        print(f"Found {len(files)} file(s)")
+
+        if not files:
+            print("    (No files found)")
+        else:
+            for file in files:
+
+                print(f"    Name : {file['name']}")
+                print(f"    ID   : {file['id']}")
+                print(f"    MIME : {file['mimeType']}")
+
+                if "size" in file:
+                    print(f"    Size : {file['size']} bytes")
+
+                print("-" * 60)
+
+        return files
     try:
-        # Root folder metadata
+
         root_meta = drive_service.files().get(
             fileId=root_folder_id,
             fields="id,name"
         ).execute()
 
-        print(f"ROOT: {root_meta.get('name')} ({root_meta.get('id')})\n")
+        print(f"ROOT: {root_meta['name']} ({root_meta['id']})\n")
 
-        # Level 1: Class folders
         class_folders = get_subfolders(root_folder_id)
 
         if not class_folders:
-            print("No class folders found under root.")
+            print("No class folders found.")
             return
 
         for class_folder in class_folders:
-            class_name = class_folder["name"]
-            class_id = class_folder["id"]
 
-            print(f"├── CLASS: {class_name} ({class_id})")
+            print(
+                f"├── CLASS: {class_folder['name']} ({class_folder['id']})"
+            )
 
-            # Level 2: Year folders under class
-            year_folders = get_subfolders(class_id)
+            year_folders = get_subfolders(class_folder["id"])
 
             if not year_folders:
-                print("│   └── No year folders found")
+                print("│   └── No year folders")
                 continue
 
             for year_folder in year_folders:
-                year_name = year_folder["name"]
-                year_id = year_folder["id"]
 
-                print(f"│   ├── YEAR: {year_name} ({year_id})")
+                print(
+                    f"│   ├── YEAR: {year_folder['name']} ({year_folder['id']})"
+                )
 
-                # Level 3: Term folders under year
-                term_folders = get_subfolders(year_id)
+                term_folders = get_subfolders(year_folder["id"])
 
                 if not term_folders:
-                    print("│   │   └── No term folders found")
+                    print("│   │   └── No term folders")
                     continue
 
                 for term_folder in term_folders:
-                    term_name = term_folder["name"]
-                    term_id = term_folder["id"]
 
-                    print(f"│   │   ├── TERM: {term_name} ({term_id})")
+                    print(
+                        f"│   │   ├── TERM: {term_folder['name']} ({term_folder['id']})"
+                    )
+                    
+                    files = get_files(term_folder["id"])
+
+                    if not files:
+                        print("│   │   │   └── (No files)")
+                        continue
+
+                    for file in files:
+
+                        icon = "📄"
+
+                        if file["mimeType"] == "application/pdf":
+                            icon = "📕"
+
+                        print(
+                            f"│   │   │   ├── {icon} "
+                            f"{file['name']} "
+                            f"({file['id']})"
+                        )
 
         print("\n================ END OF DRIVE HIERARCHY ================\n")
 
     except HttpError as e:
+
         print("ERROR while reading Drive hierarchy")
         print(str(e))
+
+log_drive_folder_hierarchy(DEMO_FOLDER_ID)
 
 def give_drive_access(file_id: str, emails: str, role: str = "reader", db: Session = None):
     """
@@ -5166,23 +5161,24 @@ async def search_pdfs(
         print(f"[DEBUG] filtered_pdfs count = {len(filtered_pdfs)}")
 
         if filtered_pdfs:
-            pdf_urls_to_send = []
-            display_pdf_lines = []
+            pdf_urls_to_send = []   # Keep this for backward compatibility
+            pdfs_to_send = []
 
             for pdf in filtered_pdfs:
+
                 frontend_pdf_url = (
                     f"{FRONTEND_PUBLIC_BASE_URL}/pdf-viewer"
                     f"?student_id={real_student_id}&file_id={pdf['id']}"
                 )
 
-                pdf_name = pdf.get("name", "booklet.pdf")
-                display_pdf_url = f"gekidsacademy.com.au/{pdf_name}"
-
                 pdf_urls_to_send.append(frontend_pdf_url)
-                display_pdf_lines.append(display_pdf_url)
 
-            answer_text = "Here are the PDFs you requested:\n" + "\n".join(display_pdf_lines)
-            print("[DEBUG] Returning PDF response")
+                pdfs_to_send.append({
+                    "name": pdf.get("name", "booklet.pdf"),
+                    "url": frontend_pdf_url
+                })
+
+            answer_text = "Here are the PDFs you requested:"
         else:
             answer_text = "No PDFs found."
             print("[DEBUG] No filtered PDFs found, returning 'No PDFs found.'")
@@ -5216,7 +5212,8 @@ async def search_pdfs(
         return JSONResponse({
             "source_name": "Academy Answer",
             "answer_markdown": answer_text,
-            "links": pdf_urls_to_send
+            "links": pdf_urls_to_send,   # Existing frontend compatibility
+            "pdfs": pdfs_to_send         # New structured PDF data
         })
 
     print("[DEBUG] PDF branch NOT entered")
