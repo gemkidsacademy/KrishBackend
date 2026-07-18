@@ -1608,7 +1608,7 @@ def get_chatbot_conversation_messages(
 @app.post("/welcome-quote", response_model=GamifiedWelcomeQuoteResponse)
 def get_welcome_quote():
     print("\n==============================")
-    print("WELCOME QUOTE")
+    print("WELCOME QUOTE(hi there)")
     print("==============================")
 
     fallback_quotes = [
