@@ -473,9 +473,11 @@ class CurrentTerm(Base):
     __tablename__ = "current_term"  # table name in DB
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    center_code = Column(String(50), nullable=False, index=True)
     term_name = Column(String(50), nullable=False)
 
 class ChatbotCurrentTermRequest(BaseModel):
+    center_code: str
     term_name: str
  
 class OpenAIUsageLog(Base):
@@ -762,21 +764,29 @@ def update_chatbot_login_settings(
     db.refresh(settings)
 
     return settings
+from fastapi import Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
 @app.get("/chatbot-current-term")
 def get_chatbot_current_term(
+    center_code: str = Query(..., description="Center code"),
     db: Session = Depends(get_db)
 ):
-
-    current_term = db.query(CurrentTerm).first()
+    current_term = (
+        db.query(CurrentTerm)
+        .filter(CurrentTerm.center_code == center_code)
+        .first()
+    )
 
     if not current_term:
         raise HTTPException(
             status_code=404,
-            detail="Current chatbot term not configured."
+            detail=f"No current term configured for center '{center_code}'."
         )
 
     return {
         "id": current_term.id,
+        "center_code": current_term.center_code,
         "term_name": current_term.term_name,
     }
 
@@ -785,19 +795,19 @@ def update_chatbot_current_term(
     data: ChatbotCurrentTermRequest,
     db: Session = Depends(get_db)
 ):
-
-    current_term = db.query(CurrentTerm).first()
+    current_term = (
+        db.query(CurrentTerm)
+        .filter(CurrentTerm.center_code == data.center_code)
+        .first()
+    )
 
     if not current_term:
-
         current_term = CurrentTerm(
-            term_name=data.term_name
+            center_code=data.center_code,
+            term_name=data.term_name,
         )
-
         db.add(current_term)
-
     else:
-
         current_term.term_name = data.term_name
 
     db.commit()
@@ -807,10 +817,10 @@ def update_chatbot_current_term(
         "message": "Chatbot current term updated successfully.",
         "term": {
             "id": current_term.id,
+            "center_code": current_term.center_code,
             "term_name": current_term.term_name,
-        }
+        },
     }
-
 @app.options("/{path:path}")  # 👈 handles all OPTIONS requests
 async def preflight_handler(path: str):
     """
@@ -3796,14 +3806,23 @@ def get_allowed_pdfs_for_student(student_id: str, db: Session):
     # -------------------------
     # 2. Load current term
     # -------------------------
-    current_term_record = db.query(CurrentTerm).first()
+    center_code = student.center_code
+
+    print(f"DEBUG: Student center_code = '{center_code}'")
+    current_term_record = (
+        db.query(CurrentTerm)
+        .filter(CurrentTerm.center_code == center_code)
+        .first()
+    )
+
     if not current_term_record:
-        print("ERROR: No current term found in DB.")
+        print(f"ERROR: No current term configured for center '{center_code}'.")
         print("========== GET ALLOWED PDFS END ==========\n")
         return None
 
     current_term = current_term_record.term_name.strip().lower()
-    print(f"DEBUG: Current term from DB = '{current_term}'")
+
+    print(f"DEBUG: Current term for center '{center_code}' = '{current_term}'")
 
     # -------------------------
     # 3. Normalize student values
@@ -5020,6 +5039,8 @@ async def search_pdfs(
             "answer_markdown": "Unable to identify the student account for this request.",
             "links": []
         })
+    student_year = student.student_year
+    class_name = student.class_name
     student_year = student.student_year
     
     conversation = get_or_create_chatbot_conversation(
