@@ -5137,6 +5137,7 @@ async def search_pdfs(
     print(f"[DEBUG] pdf_files count before PDF branch: {len(pdf_files)}")
 
     pdf_urls_to_send = []
+    pdfs_to_send = []
     if pdf_files and pdf_request_detected:
         print("[DEBUG] Entered PDF request branch")
 
@@ -5180,10 +5181,10 @@ async def search_pdfs(
                 print("[DEBUG] PDF did NOT match term/week filters")
 
         print(f"[DEBUG] filtered_pdfs count = {len(filtered_pdfs)}")
-
+        pdf_urls_to_send = []   # Keep this for backward compatibility
+        
         if filtered_pdfs:
-            pdf_urls_to_send = []   # Keep this for backward compatibility
-            pdfs_to_send = []
+            
 
             for pdf in filtered_pdfs:
 
