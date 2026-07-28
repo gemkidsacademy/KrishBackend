@@ -232,6 +232,26 @@ all_pdfs = []
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
+
+class CurrentTermListRequest(BaseModel):
+    center_code: str
+
+
+class UpdateCurrentTermRequest(BaseModel):
+    id: int
+    center_code: str
+    term_name: str
+
+
+class SetCurrentTermRequest(BaseModel):
+    id: int
+    center_code: str
+
+
+class DeleteCurrentTermRequest(BaseModel):
+    id: int
+    center_code: str
+
 class GamifiedWelcomeQuoteResponse(BaseModel):
     quote: str
     author: str 
@@ -469,12 +489,20 @@ class Student(Base):
 class KnowledgeBaseResponse(BaseModel):
     knowledge_base: Optional[str] = None
 
+class CurrentTermCreate(BaseModel):
+    center_code: str
+    term_name: str
+
+class CurrentTermListRequest(BaseModel):
+    center_code: str
+
 class CurrentTerm(Base):
     __tablename__ = "current_term"  # table name in DB
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     center_code = Column(String(50), nullable=False, index=True)
     term_name = Column(String(50), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=False)
 
 class ChatbotCurrentTermRequest(BaseModel):
     center_code: str
@@ -739,9 +767,212 @@ def get_or_create_chatbot_login_settings(db: Session):
     return settings
 
 
+@app.post("/list-current-terms-chatbot")
+def list_current_terms_chatbot(
+    request: CurrentTermListRequest,
+    db: Session = Depends(get_db)
+):
+    terms = (
+        db.query(CurrentTerm)
+        .filter(CurrentTerm.center_code == request.center_code)
+        .order_by(CurrentTerm.id.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": term.id,
+            "term_name": term.term_name,
+            "is_active": term.is_active
+        }
+        for term in terms
+    ]
+
+@app.post("/update-current-term-chatbot")
+def update_current_term_chatbot(
+    request: UpdateCurrentTermRequest,
+    db: Session = Depends(get_db)
+):
+
+    term = (
+        db.query(CurrentTerm)
+        .filter(
+            CurrentTerm.id == request.id,
+            CurrentTerm.center_code == request.center_code
+        )
+        .first()
+    )
+
+    if not term:
+        raise HTTPException(
+            status_code=404,
+            detail="Term not found."
+        )
+
+    duplicate = (
+        db.query(CurrentTerm)
+        .filter(
+            CurrentTerm.center_code == request.center_code,
+            CurrentTerm.term_name == request.term_name,
+            CurrentTerm.id != request.id
+        )
+        .first()
+    )
+
+    if duplicate:
+        raise HTTPException(
+            status_code=400,
+            detail="Another term with this name already exists."
+        )
+
+    term.term_name = request.term_name
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Term updated successfully."
+    }
+
+@app.post("/set-current-term-chatbot")
+def set_current_term_chatbot(
+    request: SetCurrentTermRequest,
+    db: Session = Depends(get_db)
+):
+
+    term = (
+        db.query(CurrentTerm)
+        .filter(
+            CurrentTerm.id == request.id,
+            CurrentTerm.center_code == request.center_code
+        )
+        .first()
+    )
+
+    if not term:
+        raise HTTPException(
+            status_code=404,
+            detail="Term not found."
+        )
+
+    db.query(CurrentTerm).filter(
+        CurrentTerm.center_code == request.center_code
+    ).update(
+        {
+            CurrentTerm.is_active: False
+        },
+        synchronize_session=False
+    )
+
+    term.is_active = True
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Current term updated successfully."
+    }
+
+@app.delete("/delete-current-term-chatbot")
+def delete_current_term_chatbot(
+    request: DeleteCurrentTermRequest,
+    db: Session = Depends(get_db)
+):
+
+    term = (
+        db.query(CurrentTerm)
+        .filter(
+            CurrentTerm.id == request.id,
+            CurrentTerm.center_code == request.center_code
+        )
+        .first()
+    )
+
+    if not term:
+        raise HTTPException(
+            status_code=404,
+            detail="Term not found."
+        )
+
+    if term.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="The current active term cannot be deleted."
+        )
+
+    db.delete(term)
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Term deleted successfully."
+    }
+
+
 # -----------------------------
 # GET chatbot login settings
 # -----------------------------
+
+
+@app.post("/list-current-terms-chatbot")
+def list_current_terms_chatbot(
+    request: CurrentTermListRequest,
+    db: Session = Depends(get_db)
+):
+    terms = (
+        db.query(CurrentTerm)
+        .filter(CurrentTerm.center_code == request.center_code)
+        .order_by(CurrentTerm.id.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": term.id,
+            "term_name": term.term_name,
+            "is_active": term.is_active,
+        }
+        for term in terms
+    ]
+
+
+@app.post("/add-current-term-chatbot")
+def add_current_term_chatbot(
+    data: CurrentTermCreate,
+    db: Session = Depends(get_db)
+):
+    # Check if the term already exists for this centre
+    existing = (
+        db.query(CurrentTerm)
+        .filter(
+            CurrentTerm.center_code == data.center_code,
+            CurrentTerm.term_name == data.term_name
+        )
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="A term with this name already exists."
+        )
+
+    term = CurrentTerm(
+        center_code=data.center_code,
+        term_name=data.term_name
+    )
+
+    db.add(term)
+    db.commit()
+    db.refresh(term)
+
+    return {
+        "success": True,
+        "message": "Term added successfully.",
+        "id": term.id
+    }
+
 @app.get("/chatbot-login-settings", response_model=ChatbotLoginSettingsResponse)
 def get_chatbot_login_settings(db: Session = Depends(get_db)):
     settings = get_or_create_chatbot_login_settings(db)
@@ -3809,20 +4040,31 @@ def get_allowed_pdfs_for_student(student_id: str, db: Session):
     center_code = student.center_code
 
     print(f"DEBUG: Student center_code = '{center_code}'")
+    # -------------------------
+    # 2. Load current active term
+    # -------------------------
+    center_code = student.center_code
+
+    print(f"DEBUG: Student center_code = '{center_code}'")
+
     current_term_record = (
         db.query(CurrentTerm)
-        .filter(CurrentTerm.center_code == center_code)
+        .filter(
+            CurrentTerm.center_code == center_code,
+            CurrentTerm.is_active == True
+        )
         .first()
     )
 
     if not current_term_record:
-        print(f"ERROR: No current term configured for center '{center_code}'.")
+        print(
+            f"ERROR: No active term configured for center '{center_code}'."
+        )
         print("========== GET ALLOWED PDFS END ==========\n")
         return None
 
     current_term = current_term_record.term_name.strip().lower()
 
-    print(f"DEBUG: Current term for center '{center_code}' = '{current_term}'")
 
     # -------------------------
     # 3. Normalize student values
