@@ -143,7 +143,33 @@ print("SENDGRID PREFIX:",
       os.getenv("SENDGRID_API_KEY", "")[:12])
 
 print("=======================================\n")
-app = FastAPI()
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("\n========== FASTAPI STARTUP ==========")
+
+    db = SessionLocal()
+
+    try:
+        print("[STARTUP] Building FAISS index...")
+        build_faiss_index(db)
+        print("[STARTUP] FAISS initialization complete.")
+    except Exception as e:
+        print(f"[STARTUP ERROR] Failed to initialize FAISS: {e}")
+    finally:
+        db.close()
+
+    print("========== STARTUP COMPLETE ==========\n")
+
+    yield
+
+    print("\n========== FASTAPI SHUTDOWN ==========")
+
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 
@@ -185,8 +211,10 @@ creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPE
 drive_service = build("drive", "v3", credentials=creds)
 
 
-#DEMO_FOLDER_ID = "1sWrRxOeH3MEVtc75Vk5My7MoDUk41gmf"
-DEMO_FOLDER_ID = "1EweJn82tRvVD5DlHwdPKzc_uppXU5LKH"
+
+#DEMO_FOLDER_ID = "1EweJn82tRvVD5DlHwdPKzc_uppXU5LKH"
+DEMO_FOLDER_ID = "1JtdWccudKKB_5GJqcaHv5HBy77fg_eRZ"
+
 
 
 
@@ -366,6 +394,8 @@ class ChatbotConversation(Base):
         nullable=False,
         default=0
     )
+
+    conversation_state = Column(JSON, nullable=True)
 
     status = Column(
         String,
@@ -5230,6 +5260,94 @@ def save_chatbot_message(
     db.add(msg)
     return msg
 
+def detect_query_intent(query: str, user_id: str, db: Session):
+
+    if is_pdf_request(query, user_id=user_id, db=db):
+        return "PDF_REQUEST"
+
+    if is_page_request(query):
+        return "PAGE_REQUEST"
+
+    return "SEMANTIC_QUERY"
+
+
+import re
+
+
+
+def extract_page_number(query: str) -> Optional[int]:
+    """
+    Extract the requested page number from a query.
+
+    Examples:
+        Explain page 6        -> 6
+        Show page 12          -> 12
+        Summarize pg 8        -> 8
+        What is on p. 15?     -> 15
+    """
+
+    query = query.lower()
+
+    patterns = [
+        r"\bpage\s+(\d+)\b",
+        r"\bpg\s+(\d+)\b",
+        r"\bp\.\s*(\d+)\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, query)
+        if match:
+            return int(match.group(1))
+
+    return None
+
+def is_page_request(query: str) -> bool:
+    """
+    Detect requests asking about a specific page.
+
+    Examples:
+    - Explain page 6
+    - What is on page 10?
+    - Summarize page 8
+    - Show page 12
+    - Tell me about page 5
+    """
+
+    query = query.lower().strip()
+
+    page_patterns = [
+        r"\bpage\s+\d+\b",
+        r"\bpg\s+\d+\b",
+        r"\bp\.\s*\d+\b",
+    ]
+
+    page_verbs = [
+        "show",
+        "explain",
+        "summarize",
+        "summarise",
+        "tell me",
+        "what is on",
+        "what's on",
+        "describe",
+        "read",
+    ]
+
+    has_page = any(re.search(pattern, query) for pattern in page_patterns)
+    has_verb = any(verb in query for verb in page_verbs)
+
+    return has_page and has_verb
+
+def resolve_pdf_selection(query, allowed_pdf_files):
+
+    query = query.lower()
+
+    for pdf in allowed_pdf_files:
+
+        if query in pdf["name"].lower():
+            return pdf
+
+    return None
 
 @app.get("/search")
 async def search_pdfs(
@@ -5240,6 +5358,10 @@ async def search_pdfs(
     class_name: str = None,
     db: Session = Depends(get_db)
 ):
+    results = []
+    top_chunks = []
+    answer_text = ""
+    selected_pdf = None
     print("\n==================== SEARCH REQUEST START ====================")
     print(f"[INFO] user_id: {user_id}, query: {query}, reasoning: {reasoning}, class_name: {class_name}")
     global FAISS_INDEX, FAISS_METADATA
@@ -5289,6 +5411,40 @@ async def search_pdfs(
         db=db,
         conversation_uuid=conversation_uuid,
         student=student
+    )
+    if conversation.conversation_state is None:
+        conversation.conversation_state = {}
+    state = conversation.conversation_state
+
+    selected_pdf = state.get("selected_pdf")
+    current_page = state.get("current_page")
+    page_context = state.get("page_context")
+    # -------------------------------
+    # Milestone 1
+    # Load previous conversation
+    # -------------------------------
+    recent_messages = (
+        db.query(ChatbotMessage)
+        .filter(ChatbotMessage.conversation_id == conversation.id)
+        .order_by(ChatbotMessage.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    recent_messages.reverse()
+
+    print("\n========== Conversation History ==========")
+
+    for msg in recent_messages:
+        print(f"{msg.role}: {msg.message_text}")
+
+    print("==========================================\n")
+    # ----------------------------------------
+    # Build conversation history for GPT
+    # ----------------------------------------
+    conversation_history = "\n".join(
+        f"{msg.role.capitalize()}: {msg.message_text}"
+        for msg in recent_messages
     )
     save_chatbot_message(
         db=db,
@@ -5373,14 +5529,77 @@ async def search_pdfs(
     # ------------------ Step 3: Handle PDF link requests ------------------
     print("\n================ PDF REQUEST DEBUG START ================")
     print(f"[DEBUG] Query received for PDF detection: {query}")
+    # ---------------------------------------
+    # Conversation State Handler
+    # ---------------------------------------
 
-    pdf_request_detected = is_pdf_request(query, user_id=user_id, db=db)
-    print(f"[DEBUG] is_pdf_request returned: {pdf_request_detected}")
+    if state.get("awaiting_pdf_selection"):
+
+        print("[STATE] Pending PDF selection detected.")
+
+        pdf_choice = resolve_pdf_selection(
+            query=query,
+            allowed_pdf_files=allowed_pdf_files
+        )
+
+        if pdf_choice:
+            
+
+            print("[STATE] User selected a booklet.")
+
+            original_query = state["pending_query"]
+
+            selected_pdf = pdf_choice
+
+            state.clear()
+
+            state["selected_pdf"] = {
+                "id": pdf_choice["id"],
+                "name": pdf_choice["name"]
+            }
+            
+            state.pop("current_page", None)
+            state.pop("page_context", None)
+
+            conversation.conversation_state = state
+            db.commit()
+
+            print("AFTER PDF SELECTION SAVE:")
+            print(conversation.conversation_state)
+            query = original_query
+            query_intent = detect_query_intent(
+                query=query,
+                user_id=user_id,
+                db=db
+            )
+
+            # Continue with page workflow using selected_pdf
+            print(selected_pdf)
+
+        else:
+
+            print("[STATE] Message is not a booklet selection.")
+
+            state.clear()
+
+            conversation.conversation_state = state
+            db.commit()
+
+            # Continue treating this as a brand-new query
+            print("[STATE] Conversation state cleared.")
+
+    query_intent = detect_query_intent(
+        query=query,
+        user_id=user_id,
+        db=db
+    )
+
+    print(f"[DEBUG] query_intent = {query_intent}")
     print(f"[DEBUG] pdf_files count before PDF branch: {len(pdf_files)}")
 
     pdf_urls_to_send = []
     pdfs_to_send = []
-    if pdf_files and pdf_request_detected:
+    if pdf_files and query_intent == "PDF_REQUEST":
         print("[DEBUG] Entered PDF request branch")
 
         query_lower = query.lower()
@@ -5480,8 +5699,129 @@ async def search_pdfs(
             "pdfs": pdfs_to_send         # New structured PDF data
         })
 
+    
+
+    # --------------------------------------------------
+    # PAGE REQUEST (Phase 3 - Step 3)
+    # --------------------------------------------------
+    if query_intent == "PAGE_REQUEST":
+
+        print("[DEBUG] PAGE_REQUEST detected.")
+
+        page_number = extract_page_number(query)
+
+        print(f"[DEBUG] Extracted page_number = {page_number}")
+        # ---------------------------------------------
+        # Multiple PDF check
+        # ---------------------------------------------
+        if len(allowed_pdf_files) > 1 and selected_pdf is None:
+
+            print("[STATE] Multiple PDFs found.")
+
+            state["awaiting_pdf_selection"] = True
+            state["pending_query"] = query
+            state["pending_page"] = page_number
+
+            conversation.conversation_state = state
+            db.commit()
+
+            pdf_names = "\n".join(
+                f"- {pdf['name']}"
+                for pdf in allowed_pdf_files
+            )
+
+            return JSONResponse({
+                "source_name": "Academy Answer",
+                "answer_markdown":
+                    f"I found multiple booklets.\n\n"
+                    f"{pdf_names}\n\n"
+                    f"Which booklet would you like me to use?",
+                "links": []
+            })
+
+        page_chunks = []
+
+        if FAISS_METADATA is not None:
+
+            for chunk in FAISS_METADATA:
+                if chunk.get("page_number") == page_number:
+                    print(chunk.get("pdf_name"))
+
+                # Page number must always match
+                if chunk.get("page_number") != page_number:
+                    continue
+
+                # If the user selected a booklet, only use chunks from that booklet
+                if selected_pdf is not None:
+
+                    if normalize_pdf_name(chunk.get("pdf_name", "")) != normalize_pdf_name(selected_pdf["name"]):
+                        continue
+
+                page_chunks.append(chunk)
+
+        print(f"[DEBUG] page_chunks found = {len(page_chunks)}")
+
+        # --------------------------------------------------
+        # Sort page chunks in their original order
+        # --------------------------------------------------
+        page_chunks = sorted(
+            page_chunks,
+            key=lambda x: x.get("chunk_index", 0)
+        )
+
+        for i, chunk in enumerate(page_chunks, start=1):
+
+            print(f"\n----- PAGE CHUNK {i} -----")
+            print(f"pdf_name    = {chunk.get('pdf_name')}")
+            print(f"page_number = {chunk.get('page_number')}")
+            print(f"chunk_index = {chunk.get('chunk_index')}")
+            print(f"pdf_link    = {chunk.get('pdf_link')}")
+
+            chunk_text = chunk.get("chunk_text", "")
+            print(f"chunk_text  = {chunk_text[:300]}")
+
+        # --------------------------------------------------
+        # Reconstruct the complete page
+        # --------------------------------------------------
+        # --------------------------------------------------
+        # Reconstruct the complete page
+        # --------------------------------------------------
+        page_context = "\n\n".join(
+            chunk.get("chunk_text", "")
+            for chunk in page_chunks
+        )
+
+        # ---------------------------------------------
+        # Save active tutoring session
+        # ---------------------------------------------
+        if selected_pdf is not None:
+
+            state["selected_pdf"] = {
+                "id": selected_pdf["id"],
+                "name": selected_pdf["name"]
+            }
+
+        state["current_page"] = page_number
+        state["page_context"] = page_context
+
+        conversation.conversation_state = state
+        db.commit()
+
+        print("\n================ PAGE CONTEXT ================\n")
+        print(page_context)
+        print("\n==============================================\n")
+
+        return JSONResponse({
+            "source_name": "Academy Answer",
+            "answer_markdown": page_context,
+            "links": []
+        })
+
     print("[DEBUG] PDF branch NOT entered")
     print("================ PDF REQUEST DEBUG END ================\n")
+
+
+
     # ------------------ Step 4: Retrieve top PDF chunks ------------------
     top_chunks = []
     raw_top_chunks = []
@@ -5618,15 +5958,30 @@ async def search_pdfs(
             # --------------------------------------------------
             # Step 4.5: Sort final chunks
             # --------------------------------------------------
+            SIMILARITY_THRESHOLD = 0.40
             if top_chunks:
-                top_chunks = sorted(top_chunks, key=lambda x: x["score"], reverse=True)[:TOP_K]
+                top_chunks = sorted(
+                    top_chunks,
+                    key=lambda x: x["score"],
+                    reverse=True
+                )[:TOP_K]
 
-                print("\n========== FILTERED TOP CHUNKS DEBUG ==========")
-                for i, c in enumerate(top_chunks[:3], 1):
-                    print(f"\n--- Filtered Chunk {i} ---")
-                    for meta_key, meta_val in c.items():
-                        print(f"{meta_key}: {meta_val}")
-                print("===============================================\n")
+                top_score = top_chunks[0]["score"]
+
+                print("\n========== SIMILARITY DEBUG ==========")
+                print(f"Query: {query}")
+                print(f"Top Score: {top_score}")
+                print(f"Threshold: {SIMILARITY_THRESHOLD}")
+                print("======================================\n")
+
+                # -----------------------------------
+                # Similarity threshold check
+                # -----------------------------------
+                if top_score < SIMILARITY_THRESHOLD:
+                    print("[DEBUG] Similarity below threshold. Using GPT external knowledge.")
+
+                    top_chunks = []
+                    use_gpt_only = True
 
         else:
             top_chunks = []
@@ -5656,7 +6011,17 @@ async def search_pdfs(
         f"PDF: {c.get('pdf_name', 'N/A')} (Page {c.get('page_number', 'N/A')})\n{c.get('chunk_text', '')}"
         for c in top_chunks
     )
+    # ---------------------------------------------
+    # If a page is already open, tutor from it
+    # ---------------------------------------------
+    if page_context:
 
+        context_texts_str = page_context
+
+        use_gpt_only = False
+
+        print("[DEBUG] Using cached page context.")
+    
     # ------------------ Step 5: Prepare GPT prompt ------------------
     reasoning_instruction = {
         "simple": (
@@ -5713,8 +6078,9 @@ async def search_pdfs(
     if use_gpt_only or not top_chunks:
         gpt_prompt = f"""
     You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
-
-    Question:
+    Conversation History:
+    {conversation_history}
+    Current Question:
     {query}
 
     Reasoning style:
@@ -5742,20 +6108,46 @@ async def search_pdfs(
         gpt_prompt = f"""
     You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
 
-    Question:
+    Conversation History:
+    {conversation_history}
+
+    Current Question:
     {query}
 
     Reasoning style:
     {reasoning_instruction}
 
-    Relevant PDF chunks:
+    Current Study Session
+
+    PDF:
+    {selected_pdf["name"] if selected_pdf else "Unknown"}
+
+    Current Page:
+    {current_page}
+
+    Current Page Content:
     {context_texts_str}
 
     Instructions:
     - Answer in clean Markdown.
     - Use clean Markdown with compact spacing. Avoid unnecessary blank lines between short sections.
-    - Use the PDF chunks when they are relevant.
-    - If the answer comes from the PDF content, base the answer on that material and do not invent facts.
+    - You are an expert educational tutor.
+
+    The student is currently studying the page shown below.
+
+    Your role is to become an interactive tutor for this page.
+
+    Instructions:
+
+    - Assume follow-up questions refer to this page unless another page is mentioned.
+    - Teach rather than simply answer.
+    - Encourage understanding.
+    - Generate examples when useful.
+    - Create quizzes if requested.
+    - Summarise when requested.
+    - Explain difficult vocabulary.
+    - Base your answers on the current page.
+    - If the information is not on this page, say so instead of inventing an answer.
     - Write like a polished ChatGPT educational response.
     - Use headings, bullets, numbering, and whitespace for readability.
     - Always consider you are responding to school-going children.
@@ -5797,32 +6189,67 @@ async def search_pdfs(
         # append PDF metadata to assistant answer
         pdf_metadata = f"[PDF used: {top_pdf_name if top_pdf_name is not None else 'N/A'} (Page {top_pdf_page if top_pdf_page is not None else 'N/A'})]"
         answer_text = f"{answer_text}\n{pdf_metadata}"
-
-        # build frontend PDF link for the top matched PDF
+        # --------------------------------------------------
+        # Build frontend PDF link for Academy Answer
+        # --------------------------------------------------
         normalized_top_pdf_name = normalize_pdf_name(top_pdf_name or "")
         top_page = top_pdf_page
 
         print("\n================ PDF LINK BUILD DEBUG START ================")
-        print(f"[DEBUG] top_doc pdf_name   = {top_doc.get('pdf_name')}")
-        print(f"[DEBUG] normalized name   = {normalized_top_pdf_name}")
-        print(f"[DEBUG] top_doc page      = {top_page}")
-        print(f"[DEBUG] real_student_id   = {real_student_id}")
+        print(f"[DEBUG] Looking for PDF: {normalized_top_pdf_name}")
         print(f"[DEBUG] allowed_pdf_files count = {len(allowed_pdf_files)}")
+        print(f"[DEBUG] pdf_files count = {len(pdf_files)}")
 
+        matched_pdf = None
+
+        # --------------------------------------------------
+        # First preference:
+        # Student's allowed PDFs
+        # --------------------------------------------------
         for pdf in allowed_pdf_files:
-            pdf_name_from_list = normalize_pdf_name(pdf.get("name", ""))
-            print(f"[DEBUG] comparing against allowed pdf name = {pdf_name_from_list}")
 
-            if pdf_name_from_list == normalized_top_pdf_name:
+            pdf_name = normalize_pdf_name(pdf.get("name", ""))
+
+            print(f"[DEBUG] allowed_pdf = {pdf_name}")
+
+            if pdf_name == normalized_top_pdf_name:
                 matched_pdf = pdf
+                print("[DEBUG] Found PDF in allowed_pdf_files")
                 break
 
+
+        # --------------------------------------------------
+        # Fallback:
+        # Search the PDFs already loaded for this class
+        # --------------------------------------------------
+        if matched_pdf is None:
+
+            print("[DEBUG] Falling back to pdf_files...")
+
+            for pdf in pdf_files:
+
+                pdf_name = normalize_pdf_name(pdf.get("name", ""))
+
+                print(f"[DEBUG] pdf_files entry = {pdf_name}")
+
+                if pdf_name == normalized_top_pdf_name:
+
+                    matched_pdf = pdf
+                    print("[DEBUG] Found PDF in pdf_files")
+                    break
+
+
+        # --------------------------------------------------
+        # Build frontend URL
+        # --------------------------------------------------
         if matched_pdf:
+
             top_pdf_file_id = matched_pdf.get("id")
 
             frontend_url = (
                 f"{FRONTEND_PUBLIC_BASE_URL}/pdf-viewer"
-                f"?student_id={real_student_id}&file_id={top_pdf_file_id}"
+                f"?student_id={real_student_id}"
+                f"&file_id={top_pdf_file_id}"
             )
 
             if top_page:
@@ -5830,13 +6257,14 @@ async def search_pdfs(
 
             used_pdfs.append(frontend_url)
 
-            print("[DEBUG] Matched PDF for academy source link")
+            print("[DEBUG] Successfully built PDF link")
             print(f"[DEBUG] matched_pdf name = {matched_pdf.get('name')}")
             print(f"[DEBUG] matched_pdf id   = {top_pdf_file_id}")
             print(f"[DEBUG] frontend_url     = {frontend_url}")
-        else:
-            print("[WARNING] Could not match top chunk pdf_name against allowed_pdf_files, so no PDF link will be attached.")
 
+        else:
+
+            print("[WARNING] Unable to locate matching PDF.")
         print("================ PDF LINK BUILD DEBUG END ================\n")
 
     # ------------------ Step 9: Prepare final results ------------------
@@ -5864,6 +6292,10 @@ async def search_pdfs(
     conversation.last_message_at = now_au
     conversation.message_count = (conversation.message_count or 0) + 2
     conversation.updated_at = now_au
+
+    print("FINAL STATE BEFORE LAST COMMIT:")
+    print(conversation.conversation_state)
+
 
     db.commit()
     print("==================== SEARCH REQUEST END ====================\n")
@@ -6353,11 +6785,13 @@ def normalize_pdf_name(name: str) -> str:
 from time import perf_counter
 from sqlalchemy.orm import load_only
 
-@app.post("/admin/initialize_faiss")
-def initialize_faiss(db: Session = Depends(get_db)):
+def build_faiss_index(db: Session):
     """
-    Stream embeddings from DB, rebuild FAISS in memory, and log progress so we
-    can tell whether it is genuinely working slowly or actually stuck.
+    Build the in-memory FAISS index from the Embedding table.
+
+    This helper is used by:
+      - POST /admin/initialize_faiss
+      - FastAPI startup (automatic initialization)
     """
     global FAISS_INDEX, FAISS_METADATA
 
@@ -6370,7 +6804,9 @@ def initialize_faiss(db: Session = Depends(get_db)):
         # --------------------------------------------------
         print("[STEP 1] Counting embeddings in DB...", flush=True)
         count_start = perf_counter()
+
         total_embeddings = db.query(Embedding).count()
+
         print(
             f"[STEP 1 DONE] Total embeddings in DB: {total_embeddings} "
             f"(took {perf_counter() - count_start:.2f}s)",
@@ -6378,12 +6814,16 @@ def initialize_faiss(db: Session = Depends(get_db)):
         )
 
         if total_embeddings == 0:
-            raise HTTPException(status_code=404, detail="No embeddings found in DB.")
+            raise HTTPException(
+                status_code=404,
+                detail="No embeddings found in DB."
+            )
 
         # --------------------------------------------------
-        # Step 2: Stream only needed columns in batches
+        # Step 2: Stream embeddings
         # --------------------------------------------------
-        print("[STEP 2] Streaming embeddings from DB in batches...", flush=True)
+        print("[STEP 2] Streaming embeddings from DB...", flush=True)
+
         stream_start = perf_counter()
 
         query = (
@@ -6407,131 +6847,96 @@ def initialize_faiss(db: Session = Depends(get_db)):
         processed = 0
 
         for e in query:
+
             vectors_list.append(e.embedding_vector)
+
             metadata_list.append({
                 "pdf_name": normalize_pdf_name(e.pdf_name),
                 "class_name": e.class_name,
                 "page_number": e.page_number,
                 "chunk_index": e.chunk_index,
                 "pdf_link": e.pdf_link,
-                "chunk_text": e.chunk_text
+                "chunk_text": e.chunk_text,
             })
 
             processed += 1
 
-            # Show the first row shape/details once for sanity
             if processed == 1:
-                first_vec_len = len(e.embedding_vector) if e.embedding_vector is not None else None
-                print("[STEP 2 SAMPLE] First embedding row:", flush=True)
-                print(f"    pdf_name      = {e.pdf_name}", flush=True)
-                print(f"    class_name    = {e.class_name}", flush=True)
-                print(f"    page_number   = {e.page_number}", flush=True)
-                print(f"    chunk_index   = {e.chunk_index}", flush=True)
-                print(f"    vector_type   = {type(e.embedding_vector)}", flush=True)
-                print(f"    vector_length = {first_vec_len}", flush=True)
+                first_vec_len = (
+                    len(e.embedding_vector)
+                    if e.embedding_vector is not None
+                    else None
+                )
+
+                print("[STEP 2 SAMPLE]", flush=True)
+                print(f"pdf_name={e.pdf_name}", flush=True)
+                print(f"vector_length={first_vec_len}", flush=True)
 
             if processed % 200 == 0:
                 print(
-                    f"[STEP 2 PROGRESS] Processed {processed}/{total_embeddings} embeddings "
-                    f"({perf_counter() - stream_start:.2f}s elapsed)",
+                    f"[STEP 2 PROGRESS] "
+                    f"{processed}/{total_embeddings}",
                     flush=True
                 )
 
         print(
-            f"[STEP 2 DONE] Finished streaming {processed} embeddings "
-            f"(took {perf_counter() - stream_start:.2f}s)",
+            f"[STEP 2 DONE] {processed} embeddings loaded",
             flush=True
         )
 
-        if processed != total_embeddings:
-            print(
-                f"[WARN] Count mismatch: count()={total_embeddings}, streamed={processed}",
-                flush=True
-            )
-
         # --------------------------------------------------
-        # Step 3: Convert to NumPy
+        # Step 3: NumPy
         # --------------------------------------------------
-        print("[STEP 3] Converting vectors to NumPy array...", flush=True)
-        np_start = perf_counter()
+        print("[STEP 3] Creating NumPy array...", flush=True)
 
         vectors = np.array(vectors_list, dtype="float32")
 
-        print(
-            f"[STEP 3 DONE] NumPy array created in {perf_counter() - np_start:.2f}s",
-            flush=True
-        )
-        print(f"    vectors.shape = {vectors.shape}", flush=True)
-        print(f"    vectors.dtype = {vectors.dtype}", flush=True)
+        print(f"Shape = {vectors.shape}", flush=True)
 
         if len(vectors.shape) != 2:
             raise ValueError(
-                f"Embedding vectors array has invalid shape {vectors.shape}. "
-                f"Expected 2D array like (num_embeddings, embedding_dim)."
+                f"Invalid embedding shape: {vectors.shape}"
             )
 
-        if vectors.shape[0] == 0:
-            raise ValueError("No vectors available after conversion.")
+        d = vectors.shape[1]
 
         # --------------------------------------------------
-        # Step 4: Create FAISS index
+        # Step 4: FAISS
         # --------------------------------------------------
-        d = vectors.shape[1]
-        print(f"[STEP 4] Creating FAISS index with dimension d={d}...", flush=True)
-        faiss_create_start = perf_counter()
+        print("[STEP 4] Creating FAISS index...", flush=True)
 
         temp_index = faiss.IndexFlatIP(d)
 
-        print(
-            f"[STEP 4 DONE] FAISS index object created in "
-            f"{perf_counter() - faiss_create_start:.2f}s",
-            flush=True
-        )
-
         # --------------------------------------------------
-        # Step 5: Normalize vectors
+        # Step 5: Normalize
         # --------------------------------------------------
-        print("[STEP 5] Normalizing vectors for cosine similarity...", flush=True)
-        norm_start = perf_counter()
+        print("[STEP 5] Normalizing vectors...", flush=True)
 
         faiss.normalize_L2(vectors)
 
-        print(
-            f"[STEP 5 DONE] Vector normalization complete in "
-            f"{perf_counter() - norm_start:.2f}s",
-            flush=True
-        )
-
         # --------------------------------------------------
-        # Step 6: Add vectors to FAISS
+        # Step 6: Add vectors
         # --------------------------------------------------
-        print("[STEP 6] Adding vectors to FAISS index...", flush=True)
-        add_start = perf_counter()
+        print("[STEP 6] Adding vectors...", flush=True)
 
         temp_index.add(vectors)
 
-        print(
-            f"[STEP 6 DONE] Added {temp_index.ntotal} vectors to FAISS "
-            f"in {perf_counter() - add_start:.2f}s",
-            flush=True
-        )
+        # --------------------------------------------------
+        # Step 7: Swap globals
+        # --------------------------------------------------
+        print("[STEP 7] Updating globals...", flush=True)
 
-        # --------------------------------------------------
-        # Step 7: Swap globals only after success
-        # --------------------------------------------------
-        print("[STEP 7] Updating in-memory globals...", flush=True)
         FAISS_INDEX = temp_index
         FAISS_METADATA = metadata_list
+
+        total_time = perf_counter() - t0
+
         print(
-            f"[STEP 7 DONE] FAISS_INDEX and FAISS_METADATA updated "
-            f"({len(FAISS_METADATA)} metadata rows)",
+            f"[SUCCESS] Indexed {temp_index.ntotal} embeddings "
+            f"in {total_time:.2f}s",
             flush=True
         )
 
-        total_time = perf_counter() - t0
-        print("[SUCCESS] FAISS index initialized successfully.", flush=True)
-        print(f"          Total embeddings indexed: {temp_index.ntotal}", flush=True)
-        print(f"          Total time: {total_time:.2f}s", flush=True)
         print("================ INITIALIZE FAISS END ================\n", flush=True)
 
         return {
@@ -6541,20 +6946,12 @@ def initialize_faiss(db: Session = Depends(get_db)):
             "total_time_seconds": round(total_time, 2),
         }
 
-    except HTTPException as http_err:
-        print(f"[HTTP ERROR] {http_err.detail}", flush=True)
-        print("================ INITIALIZE FAISS FAILED ================\n", flush=True)
-        raise http_err
+    except Exception:
+        raise
 
-    except Exception as e:
-        import traceback
-        print(f"[ERROR] Failed to initialize FAISS index: {str(e)}", flush=True)
-        traceback.print_exc()
-        print("================ INITIALIZE FAISS FAILED ================\n", flush=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to initialize FAISS index: {str(e)}"
-        )
+@app.post("/admin/initialize_faiss")
+def initialize_faiss(db: Session = Depends(get_db)):
+    return build_faiss_index(db)
 
 @app.post("/admin/create_vectorstores")
 async def create_vectorstores():
