@@ -7,7 +7,16 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from cachetools import TTLCache
 import re 
+
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+from sqlalchemy.orm import Session
+from fastapi import Depends
+
 from langchain_core.documents import Document
+from tempfile import NamedTemporaryFile
+from fastapi.responses import FileResponse
+
 import faiss
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email 
@@ -260,6 +269,9 @@ all_pdfs = []
 
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
+
+class AudioRequest(BaseModel):
+    message_id: int
 
 class CurrentTermListRequest(BaseModel):
     center_code: str
@@ -5257,9 +5269,13 @@ def save_chatbot_message(
         response_links=response_links,
         created_at=australia_now()
     )
-    db.add(msg)
-    return msg
 
+    db.add(msg)
+
+    # Generate the primary key immediately
+    db.flush()
+
+    return msg
 def detect_query_intent(query: str, user_id: str, db: Session):
 
     if is_pdf_request(query, user_id=user_id, db=db):
@@ -5348,6 +5364,193 @@ def resolve_pdf_selection(query, allowed_pdf_files):
             return pdf
 
     return None
+
+import re
+
+
+def extract_question_from_page(
+    page_context: str,
+    question_number: int
+) -> Optional[str]:
+    """
+    Extract a single question from a reconstructed page.
+
+    Starts at Q{question_number}
+    Stops at Q{question_number + 1}
+
+    Returns None if not found.
+    """
+
+    next_question = question_number + 1
+
+    start_pattern = re.compile(
+        rf"\b(?:Question\s*)?Q?\s*{question_number}\s*\.",
+        re.IGNORECASE
+    )
+
+    end_pattern = re.compile(
+        rf"\b(?:Question\s*)?Q?\s*{next_question}\s*\.",
+        re.IGNORECASE
+    )
+
+    start_match = start_pattern.search(page_context)
+
+    if not start_match:
+        return None
+
+    end_match = end_pattern.search(
+        page_context,
+        start_match.end()
+    )
+
+    if end_match:
+        return page_context[start_match.start():end_match.start()].strip()
+
+    return page_context[start_match.start():].strip()
+
+
+def extract_question_number(query: str) -> Optional[int]:
+    """
+    Extract the requested question number from a query.
+
+    Examples:
+        Explain question 8
+        Solve q8
+        Explain Q.12
+        Explain page 35 question 8
+    """
+
+    query = query.lower()
+
+    patterns = [
+        r"\bquestion\s+(\d+)\b",
+        r"\bq\s*\.?\s*(\d+)\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, query)
+        if match:
+            return int(match.group(1))
+
+    return None
+
+def strip_markdown(text: str) -> str:
+    """
+    Remove most markdown formatting before sending text to TTS.
+    """
+
+    text = re.sub(r"```.*?```", "", text, flags=re.S)
+    text = re.sub(r"`", "", text)
+    text = re.sub(r"#+\s*", "", text)
+    text = re.sub(r"\*\*", "", text)
+    text = re.sub(r"\*", "", text)
+    text = re.sub(r"_", "", text)
+    text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
+
+    return text.strip()
+
+@app.post("/chatbot/audio")
+async def chatbot_audio(
+    request: AudioRequest,
+    db: Session = Depends(get_db)
+):
+    message = (
+        db.query(ChatbotMessage)
+        .filter(ChatbotMessage.id == request.message_id)
+        .first()
+    )
+
+    if not message:
+        raise HTTPException(
+            status_code=404,
+            detail="Message not found."
+        )
+
+    text = strip_markdown(message.message_text)
+
+    print("\n========== AUDIO REQUEST ==========")
+    print(f"Message ID : {message.id}")
+    print(f"Characters : {len(text)}")
+    print("===================================\n")
+
+    try:
+
+        with NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+
+            openai_client.audio.speech.create(
+                model="gpt-4o-mini-tts",
+                voice="alloy",
+                input=text
+            ).stream_to_file(temp_file.name)
+
+            return FileResponse(
+                temp_file.name,
+                media_type="audio/mpeg",
+                filename="response.mp3"
+            )
+
+    except Exception as e:
+
+        print(e)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to generate audio."
+        )
+@app.post("/chatbot/audio")
+async def chatbot_audio(
+    request: AudioRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate speech for an existing chatbot message.
+    """
+
+    message = (
+        db.query(ChatbotMessage)
+        .filter(ChatbotMessage.id == request.message_id)
+        .first()
+    )
+
+    if message is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Chatbot message not found."
+        )
+
+    text = strip_markdown(message.message_text)
+
+    print("\n========== AUDIO REQUEST ==========")
+    print(f"Message ID : {message.id}")
+    print(f"Characters : {len(text)}")
+    print("===================================\n")
+
+    try:
+
+        speech_response = openai_client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="alloy",
+            input=text
+        )
+
+        audio_bytes = speech_response.read()
+
+        return StreamingResponse(
+            BytesIO(audio_bytes),
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": "inline; filename=response.mp3"
+            }
+        )
+
+    except Exception as e:
+
+        print(e)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to generate audio."
+        )
 
 @app.get("/search")
 async def search_pdfs(
@@ -5790,12 +5993,26 @@ async def search_pdfs(
             chunk.get("chunk_text", "")
             for chunk in page_chunks
         )
+        print("\n================ PAGE_CONTEXT START ================")
+        print(page_context)
+        print("================ PAGE_CONTEXT END ==================\n")
+        question_number = extract_question_number(query)
 
-        # ---------------------------------------------
-        # Save active tutoring session
-        # ---------------------------------------------
+        if question_number is not None:
+
+            extracted_question = extract_question_from_page(
+                page_context,
+                question_number
+            )
+
+            if extracted_question:
+
+                print("\n============= QUESTION EXTRACTION =============")
+                print(extracted_question)
+                print("===============================================\n")
+
+                page_context = extracted_question
         if selected_pdf is not None:
-
             state["selected_pdf"] = {
                 "id": selected_pdf["id"],
                 "name": selected_pdf["name"]
@@ -5807,15 +6024,10 @@ async def search_pdfs(
         conversation.conversation_state = state
         db.commit()
 
-        print("\n================ PAGE CONTEXT ================\n")
-        print(page_context)
-        print("\n==============================================\n")
+        print("[DEBUG] Page tutoring session loaded.")
 
-        return JSONResponse({
-            "source_name": "Academy Answer",
-            "answer_markdown": page_context,
-            "links": []
-        })
+        # Do NOT return here.
+        # Allow execution to continue into the GPT prompt.
 
     print("[DEBUG] PDF branch NOT entered")
     print("================ PDF REQUEST DEBUG END ================\n")
@@ -5838,7 +6050,13 @@ async def search_pdfs(
     faiss_available = FAISS_INDEX is not None and FAISS_METADATA is not None
     print(f"[DEBUG] faiss_available = {faiss_available}")
 
-    if pdf_files and not use_context_only:
+    if page_context:
+
+        print("[DEBUG] Skipping FAISS because an active page tutoring session exists.")
+
+        top_chunks = []
+        use_gpt_only = False
+    elif pdf_files and not use_context_only:
         class_list = [cn.strip() for cn in class_name.split(",")] if class_name else []
         print(f"[DEBUG] class_list = {class_list}")
 
@@ -5997,7 +6215,7 @@ async def search_pdfs(
             fallback_reason = "use_context_only_enabled"
 
     # ------------------ Step 4.6: Decide whether GPT fallback is needed ------------------
-    if not top_chunks:
+    if not top_chunks and not page_context:
         use_gpt_only = True
 
     print(f"[DEBUG] raw_top_chunks final count = {len(raw_top_chunks)}")
@@ -6042,6 +6260,23 @@ async def search_pdfs(
     }.get(reasoning, 
           "Use plain, beginner-friendly language. Provide only the final answer in plain text, without step-by-step explanation or LaTeX, include units if applicable."
     )
+    page_reasoning_instruction = {
+        "simple": (
+            "Use plain, beginner-friendly language. Keep sentences short and avoid jargon. "
+            "Provide only the final answer. Do NOT include step-by-step explanations, formulas, or LaTeX. "
+            "If there is a number, include it with units, e.g., '112.5 ml'."
+        ),
+        "medium": (
+            "Give a balanced explanation — clear, moderately detailed, and easy to follow. "
+            "Provide only the final answer or main result. Avoid unnecessary formulas or LaTeX. "
+            "Include numbers with units when applicable."
+        ),
+        "advanced": (
+            "Provide a detailed, analytical, and example-rich explanation. "
+            "Include the final answer clearly at the start. Minimize LaTeX or raw formulas. "
+            "Numbers should be accompanied by units, e.g., '112.5 ml'."
+        )
+    }["advanced"]
 
 
     #if use_context_only or not top_chunks:
@@ -6074,36 +6309,91 @@ async def search_pdfs(
         print(f"Country: {country}, State: {state}")
     else:
         print("No row found in FranchiseLocation table.")
-
-    if use_gpt_only or not top_chunks:
+    if page_context:
         gpt_prompt = f"""
-    You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
-    Conversation History:
-    {conversation_history}
-    Current Question:
-    {query}
+        You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
 
-    Reasoning style:
-    {reasoning_instruction}
+        Conversation History:
+        {conversation_history}
 
-    Instructions:
-    - Answer in clean Markdown.
-    - Use clean Markdown with compact spacing. Avoid unnecessary blank lines between short sections.
-    - Write like a polished ChatGPT educational response.
-    - Use short introductory context before the main answer when helpful.
-    - Use headings, bullet points, numbered lists, and spacing where appropriate.
-    - If the user asks for questions, worksheets, quizzes, explanations, summaries, or study help, structure the response neatly instead of writing one dense paragraph.
-    - If the user asks for NSW Selective / OC / NAPLAN style material, match that exam style rather than giving generic school questions.
-    - Always consider you are responding to school-going children.
-    - Do not mention previous conversation unless explicitly asked.
-    - Do not prepend labels like [GPT answer].
-    - If you are unsure, say so clearly.
+        Current Question:
+        {query}
 
-    Additional instruction for educational content:
-    - If the user asks for multiple questions, format each question under its own numbered heading.
-    - If the user asks for explanation, use sections and bullet points.
-    - Avoid raw LaTeX unless necessary.
-    """
+        Reasoning style:
+        {page_reasoning_instruction}
+
+        Current Study Session
+
+        PDF:
+        {selected_pdf["name"] if selected_pdf else "Unknown"}
+
+        Current Page:
+        {current_page}
+
+        Current Page Content:
+        {context_texts_str}
+
+        Instructions:
+
+        You are an expert educational tutor.
+
+        The page content above is the student's current study material.
+
+        The student's original request is:
+
+        "{query}"
+
+        Your task is to satisfy the student's request using the supplied page.
+
+        Always teach rather than simply provide answers.
+
+        Guide the student through the reasoning whenever appropriate.
+
+        Base your response primarily on the supplied page content.
+
+        Do not simply copy text from the page.
+
+        If the student's request refers to a specific question on the page, focus on that question.
+
+        If the student asks for:
+        - an explanation, explain it clearly.
+        - a summary, summarise the page.
+        - a quiz, create one based on the page.
+        - vocabulary help, explain difficult words.
+        - help solving a problem, guide them step by step.
+
+        If the answer cannot be found on the supplied page, clearly say so instead of inventing information.
+
+        Assume follow-up questions refer to the current page unless another page is mentioned.
+
+        Respond in clean Markdown with headings, bullet points and clear formatting suitable for school students.
+        """
+
+    elif use_gpt_only or not top_chunks:
+        gpt_prompt = f"""
+        You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
+
+        Conversation History:
+        {conversation_history}
+
+        Current Question:
+        {query}
+
+        Reasoning style:
+        {reasoning_instruction}
+
+        Instructions:
+        - Answer in clean Markdown.
+        - Use clean Markdown with compact spacing.
+        - Write like a polished ChatGPT educational response.
+        - Use headings, bullet points and numbered lists where appropriate.
+        - If the user asks for questions, worksheets, quizzes, explanations, summaries or study help, structure the response clearly.
+        - If the user asks for NSW Selective / OC / NAPLAN style material, match that exam style.
+        - Always consider you are responding to school-going children.
+        - Do not mention previous conversation unless explicitly asked.
+        - If you are unsure, say so clearly.
+        - Avoid raw LaTeX unless necessary.
+        """
     else:
         gpt_prompt = f"""
     You are an educational assistant for a {class_name} student in {student_year}, located in {country} {state}.
@@ -6129,30 +6419,36 @@ async def search_pdfs(
     {context_texts_str}
 
     Instructions:
-    - Answer in clean Markdown.
-    - Use clean Markdown with compact spacing. Avoid unnecessary blank lines between short sections.
-    - You are an expert educational tutor.
 
-    The student is currently studying the page shown below.
+    You are an expert educational tutor.
 
-    Your role is to become an interactive tutor for this page.
+    The page content above is the student's current study material.
 
-    Instructions:
+    The student's request is:
 
-    - Assume follow-up questions refer to this page unless another page is mentioned.
-    - Teach rather than simply answer.
-    - Encourage understanding.
-    - Generate examples when useful.
-    - Create quizzes if requested.
-    - Summarise when requested.
-    - Explain difficult vocabulary.
-    - Base your answers on the current page.
-    - If the information is not on this page, say so instead of inventing an answer.
-    - Write like a polished ChatGPT educational response.
-    - Use headings, bullets, numbering, and whitespace for readability.
-    - Always consider you are responding to school-going children.
-    - Do not prepend labels like [PDF-based answer] or [GPT answer].
-    - If the PDF chunks are not enough, say so honestly rather than inventing.
+    "{query}"
+
+    Your task is to satisfy the student's request using the supplied page.
+
+    Always teach rather than simply provide answers.
+
+    Guide the student through the reasoning when appropriate.
+
+    Base your response primarily on the supplied page content.
+
+    Do not simply copy text from the page.
+
+    If the student's request refers to a specific question on the page, focus on that question.
+
+    If the student asks for a summary, summarise the page.
+
+    If the student asks for a quiz, create one.
+
+    If the answer cannot be found on the supplied page, clearly say so instead of inventing information.
+
+    Assume follow-up questions refer to the current page unless another page is mentioned.
+
+    Always respond in clean Markdown with headings, bullet points and clear formatting suitable for school students.
     """
 
     # ------------------ Step 6: Call GPT ------------------
@@ -6273,7 +6569,7 @@ async def search_pdfs(
     #append_to_user_context(user_id, "user", query)
     #append_to_user_context(user_id, "assistant", answer_text)
     final_links = used_pdfs if used_pdfs else []
-    save_chatbot_message(
+    saved_message = save_chatbot_message(
         db=db,
         conversation_id=conversation.id,
         role="assistant",
@@ -6286,6 +6582,8 @@ async def search_pdfs(
         pdf_file_id=top_pdf_file_id,
         response_links=used_pdfs if source_name == "Academy Answer" else []
     )
+
+    print(f"[DEBUG] Saved assistant message id = {saved_message.id}")
 
     now_au = australia_now()
 
@@ -6300,13 +6598,15 @@ async def search_pdfs(
     db.commit()
     print("==================== SEARCH REQUEST END ====================\n")
     return JSONResponse({
-        "source_name": source_name,
-        "answer_markdown": answer_text,
-        "links": final_links
+    "source_name": source_name,
+    "answer_markdown": answer_text,
+    "links": final_links,
+    "message_id": saved_message.id
     })
 
 
 @app.post("/api/users/bulk")
+
 async def upload_users(file: UploadFile = File(...), db: Session = Depends(get_db)):
     print("DEBUG: Bulk CSV upload request received")
 
