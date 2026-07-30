@@ -5278,13 +5278,33 @@ def save_chatbot_message(
     return msg
 def detect_query_intent(query: str, user_id: str, db: Session):
 
+    # -----------------------------
+    # PDF request
+    # -----------------------------
     if is_pdf_request(query, user_id=user_id, db=db):
         return "PDF_REQUEST"
 
+    # -----------------------------
+    # Explicit page request
+    # e.g. "Explain page 35"
+    # -----------------------------
     if is_page_request(query):
         return "PAGE_REQUEST"
 
-    return "SEMANTIC_QUERY"
+    # -----------------------------
+    # Follow-up question about the
+    # currently opened page
+    # e.g. "Question 8",
+    #      "Explain this",
+    #      "Summarise this page"
+    # -----------------------------
+    if is_page_followup(query):
+        return "PAGE_FOLLOWUP"
+
+    # -----------------------------
+    # General chatbot query
+    # -----------------------------
+    return "GENERAL_QUERY"
 
 
 import re
@@ -5551,7 +5571,43 @@ async def chatbot_audio(
             status_code=500,
             detail="Unable to generate audio."
         )
+import re
 
+def is_page_followup(query: str) -> bool:
+    """
+    Returns True if the query looks like a follow-up to the
+    currently opened PDF page rather than a brand-new topic.
+    """
+
+    query = query.strip().lower()
+
+    followup_patterns = [
+        r"^question\s*\d+",
+        r"^q\s*\d+",
+        r"^explain\b",
+        r"^explain this\b",
+        r"^explain that\b",
+        r"^what does this mean\b",
+        r"^what does that mean\b",
+        r"^summari[sz]e\b",
+        r"^give me a quiz\b",
+        r"^quiz\b",
+        r"^help\b",
+        r"^solve\b",
+        r"^answer\b",
+        r"^this question\b",
+        r"^that question\b",
+        r"^next question\b",
+        r"^can you explain\b",
+        r"^why\b",
+        r"^how\b"
+    ]
+
+    for pattern in followup_patterns:
+        if re.search(pattern, query):
+            return True
+
+    return False
 @app.get("/search")
 async def search_pdfs(
     query: str,
@@ -5799,6 +5855,31 @@ async def search_pdfs(
 
     print(f"[DEBUG] query_intent = {query_intent}")
     print(f"[DEBUG] pdf_files count before PDF branch: {len(pdf_files)}")
+
+    # --------------------------------------------------
+    # Exit Page Tutoring Mode
+    # --------------------------------------------------
+    if page_context:
+
+        page_related_intents = {
+            "PAGE_REQUEST",
+            "PAGE_FOLLOWUP"
+        }
+
+        if query_intent not in page_related_intents:
+
+            print("[STATE] Leaving page tutoring mode.")
+
+            state.pop("page_context", None)
+            state.pop("current_page", None)
+            state.pop("selected_pdf", None)
+
+            conversation.conversation_state = state
+            db.commit()
+
+            page_context = None
+            current_page = None
+            selected_pdf = None
 
     pdf_urls_to_send = []
     pdfs_to_send = []
@@ -6176,7 +6257,7 @@ async def search_pdfs(
             # --------------------------------------------------
             # Step 4.5: Sort final chunks
             # --------------------------------------------------
-            SIMILARITY_THRESHOLD = 0.40
+            SIMILARITY_THRESHOLD = 0.30
             if top_chunks:
                 top_chunks = sorted(
                     top_chunks,
@@ -6366,7 +6447,18 @@ async def search_pdfs(
 
         Assume follow-up questions refer to the current page unless another page is mentioned.
 
-        Respond in clean Markdown with headings, bullet points and clear formatting suitable for school students.
+        Formatting Requirements:
+
+        - Use clean, compact Markdown.
+        - Use headings (## or ###) for major sections only.
+        - Prefer paragraphs instead of lists.
+        - Do NOT use nested lists under any circumstances.
+        - Do NOT place bullet lists inside numbered lists.
+        - Do NOT place numbered lists inside bullet lists.
+        - Avoid indentation before bullet points.
+        - For mathematical explanations, write calculations as normal paragraphs instead of lists.
+        - Leave exactly one blank line between sections.
+        - Keep the response visually compact.
         """
 
     elif use_gpt_only or not top_chunks:
@@ -6383,10 +6475,15 @@ async def search_pdfs(
         {reasoning_instruction}
 
         Instructions:
-        - Answer in clean Markdown.
-        - Use clean Markdown with compact spacing.
-        - Write like a polished ChatGPT educational response.
-        - Use headings, bullet points and numbered lists where appropriate.
+        Formatting Requirements:
+
+        - Use clean, compact Markdown.
+        - Use headings only for major sections.
+        - Prefer paragraphs instead of bullet lists whenever possible.
+        - Never create nested bullet lists.
+        - Use numbered lists only when explaining a sequence of steps.
+        - Leave exactly one blank line between sections.
+        - Avoid unnecessary whitespace.
         - If the user asks for questions, worksheets, quizzes, explanations, summaries or study help, structure the response clearly.
         - If the user asks for NSW Selective / OC / NAPLAN style material, match that exam style.
         - Always consider you are responding to school-going children.
@@ -6431,6 +6528,7 @@ async def search_pdfs(
     Your task is to satisfy the student's request using the supplied page.
 
     Always teach rather than simply provide answers.
+    Write explanations in the same style as a teacher speaking to a student. Use paragraphs instead of outlines whenever possible.
 
     Guide the student through the reasoning when appropriate.
 
@@ -6448,7 +6546,39 @@ async def search_pdfs(
 
     Assume follow-up questions refer to the current page unless another page is mentioned.
 
-    Always respond in clean Markdown with headings, bullet points and clear formatting suitable for school students.
+    Formatting Requirements:
+
+    - Use clean, compact Markdown.
+    - Use H1 (##) or H2 (###) headings only for major sections.
+    - Prefer short paragraphs over bullet lists.
+    - Use bullet lists only when listing separate ideas.
+    - Never create nested bullet lists (no bullets inside bullets).
+    - Do not use more than one level of bullets.
+    - Use numbered lists only for sequential steps.
+    - Leave exactly one blank line between sections.
+    - Keep the response visually compact and easy to read.
+    - Do not generate Markdown that produces nested HTML lists.
+    Preferred format example:
+
+    ## Step 1: Convert "Twelve hundreds"
+
+    "Twelve hundreds" means twelve groups of one hundred.
+
+    Calculation:
+
+    12 × 100 = 1,200.
+
+    ## Step 2: Convert "Thirty-four tens"
+
+    Thirty-four tens means thirty-four groups of ten.
+
+    Calculation:
+
+    34 × 10 = 340.
+
+    ## Final Answer
+
+    1,200 + 340 + 12 = 1,552.
     """
 
     # ------------------ Step 6: Call GPT ------------------
@@ -6458,6 +6588,10 @@ async def search_pdfs(
         temperature=0.2
     )
     answer_text = answer_response.choices[0].message.content.strip()
+
+    print("\n========== RAW GPT RESPONSE ==========")
+    print(repr(answer_text))
+    print("======================================\n")
 
     # ------------------ Step 7: Determine source ------------------
     if answer_text.startswith("[PDF-based answer]"):
