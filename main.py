@@ -222,8 +222,7 @@ drive_service = build("drive", "v3", credentials=creds)
 
 
 #DEMO_FOLDER_ID = "1EweJn82tRvVD5DlHwdPKzc_uppXU5LKH"
-DEMO_FOLDER_ID = "1JtdWccudKKB_5GJqcaHv5HBy77fg_eRZ"
-
+DEMO_FOLDER_ID = "1JtdWccudKKB_5GJqcaHv5HBy77fg_eRZ" 
 
 
 
@@ -2995,6 +2994,46 @@ def upload_to_gcs(file_bytes, blob_name):
     blob = gcs_bucket.blob(blob_name)
     blob.upload_from_string(file_bytes)
     print(f"Uploaded {blob_name} to bucket {gcs_bucket.name}")
+
+def delete_from_gcs(pdf_path: str):
+    """
+    Deletes the original PDF and its vector store from Google Cloud Storage.
+    """
+
+    pdf_name = os.path.basename(pdf_path)
+    pdf_base_name = pdf_name.rsplit(".", 1)[0]
+
+    parent_folder = os.path.dirname(pdf_path)
+    vectorstore_prefix = f"{parent_folder}/vectorstore_{pdf_base_name}/"
+
+    print(f"[SYNC] Removing GCS resources for '{pdf_name}'")
+
+    # --------------------------------------------------
+    # Delete vector store
+    # --------------------------------------------------
+    deleted_vs = 0
+
+    for blob in gcs_bucket.list_blobs(prefix=vectorstore_prefix):
+        print(f"[SYNC] Deleting vector store blob: {blob.name}")
+        blob.delete()
+        deleted_vs += 1
+
+    print(f"[SYNC] Deleted {deleted_vs} vector store blob(s).")
+
+    # --------------------------------------------------
+    # Delete PDF
+    # --------------------------------------------------
+    pdf_blob = gcs_bucket.blob(pdf_path)
+
+    if pdf_blob.exists():
+        if pdf_blob.exists():
+            pdf_blob.delete()
+            print(f"[SYNC] Deleted PDF blob: {pdf_path}")
+        else:
+            print(f"[SYNC] PDF blob already missing: {pdf_path}")
+        print(f"[SYNC] Deleted PDF blob: {pdf_path}")
+    else:
+        print(f"[SYNC] PDF blob not found: {pdf_path}")
 
 def download_from_gcs(blob_name):
     blob = gcs_bucket.blob(blob_name)
@@ -6430,20 +6469,29 @@ async def search_pdfs(
 
         Guide the student through the reasoning whenever appropriate.
 
-        Base your response primarily on the supplied page content.
+        Use the supplied page content as the authoritative source for your answer.
 
-        Do not simply copy text from the page.
+        When the supplied page contains information that answers the student's question:
 
-        If the student's request refers to a specific question on the page, focus on that question.
+        - Answer using ONLY the information provided on the page.
+        - Do not replace the page's explanation with your own knowledge.
+        - Your role is to explain, simplify and teach the material from the page in language appropriate for the student's level.
+        - You may reword or reorganize the information to improve clarity, but do not introduce new facts or concepts that are not supported by the page.
+
+        If the student's request refers to a specific question on the page, focus only on that question.
 
         If the student asks for:
-        - an explanation, explain it clearly.
+        - an explanation, explain it clearly using the page.
         - a summary, summarise the page.
-        - a quiz, create one based on the page.
-        - vocabulary help, explain difficult words.
-        - help solving a problem, guide them step by step.
+        - a quiz, create one based only on the page.
+        - vocabulary help, explain difficult words using the page whenever possible.
+        - help solving a problem, guide them step by step using the page.
 
-        If the answer cannot be found on the supplied page, clearly say so instead of inventing information.
+        Only use your own general knowledge if the supplied page does not contain enough information to answer the student's question.
+
+        If the page only partially answers the question, first explain what the page says, then clearly indicate that any additional information is general knowledge.
+
+        If the answer cannot be found on the supplied page, clearly state that the page does not contain that information instead of inventing an answer or relying on your own knowledge.
 
         Assume follow-up questions refer to the current page unless another page is mentioned.
 
@@ -7219,6 +7267,49 @@ def normalize_pdf_name(name: str) -> str:
 from time import perf_counter
 from sqlalchemy.orm import load_only
 
+def delete_from_gcs_by_pdf_name(pdf_name: str):
+    """
+    Deletes the original PDF and its vector store from GCS using only the PDF name.
+    """
+
+    print(f"[SYNC] Searching GCS for '{pdf_name}'")
+
+    pdf_blob = None
+
+    for blob in gcs_bucket.list_blobs():
+        if blob.name.endswith("/" + pdf_name) or blob.name == pdf_name:
+            pdf_blob = blob
+            break
+
+    if not pdf_blob:
+        print(f"[SYNC] Could not find '{pdf_name}' in GCS.")
+        return
+
+    pdf_path = pdf_blob.name
+
+    pdf_base_name = pdf_name.rsplit(".", 1)[0]
+    parent_folder = os.path.dirname(pdf_path)
+    vectorstore_prefix = f"{parent_folder}/vectorstore_{pdf_base_name}/"
+
+    # Delete vector store
+    deleted_vs = 0
+
+    for blob in gcs_bucket.list_blobs(prefix=vectorstore_prefix):
+        print(f"[SYNC] Deleting vector store blob: {blob.name}")
+        blob.delete()
+        deleted_vs += 1
+
+    print(f"[SYNC] Deleted {deleted_vs} vector store blob(s).")
+
+    # Delete PDF
+    if pdf_blob.exists():
+        pdf_blob.delete()
+        print(f"[SYNC] Deleted PDF blob: {pdf_path}")
+    else:
+        print(f"[SYNC] PDF blob already missing: {pdf_path}")
+
+    print(f"[SYNC] Deleted PDF blob: {pdf_path}")
+
 def build_faiss_index(db: Session):
     """
     Build the in-memory FAISS index from the Embedding table.
@@ -7433,10 +7524,54 @@ def upload_embeddings_to_db(db: Session = Depends(get_db)):
     try:
         # Step 0: Fetch PDFs
         print("[DEBUG] Fetching PDF list from Google Drive...")
+
         all_pdfs = list_pdfs(DEMO_FOLDER_ID)
+
         if not all_pdfs:
             raise HTTPException(status_code=404, detail="No PDFs found in Google Drive.")
+
         print(f"[DEBUG] Found {len(all_pdfs)} PDFs to process.")
+
+        # --------------------------------------------------
+        # Sync database with Google Drive
+        # --------------------------------------------------
+        current_pdfs = {
+            pdf["name"]: pdf
+            for pdf in all_pdfs
+        }
+
+        current_pdf_names = set(current_pdfs.keys())
+
+        db_pdf_names = {
+            row[0]
+            for row in db.query(Embedding.pdf_name).distinct().all()
+        }
+
+        deleted_pdfs = db_pdf_names - current_pdf_names
+
+        if deleted_pdfs:
+            print(f"[SYNC] Found {len(deleted_pdfs)} deleted PDF(s).")
+
+            for pdf_name in deleted_pdfs:
+
+                # Delete GCS resources first
+                try:
+                    delete_from_gcs_by_pdf_name(pdf_name)
+                except Exception as e:
+                    print(f"[SYNC] Failed to delete GCS resources for '{pdf_name}': {e}")
+
+                # Delete embeddings
+                deleted = (
+                    db.query(Embedding)
+                    .filter(Embedding.pdf_name == pdf_name)
+                    .delete(synchronize_session=False)
+                )
+
+                print(f"[SYNC] Deleted {deleted} embeddings for '{pdf_name}'")
+
+            db.commit()
+        else:
+            print("[SYNC] No deleted PDFs found.")
 
         # Initialize embeddings model
         embeddings_model = OpenAIEmbeddings(
