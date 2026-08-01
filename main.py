@@ -3420,26 +3420,25 @@ def ensure_vectorstores_for_all_pdfs(pdf_files):
         # --------------------------------------------------
         # Show the current decision path without changing it
         # --------------------------------------------------
-        if pdf_blob_exists:
+        # --------------------------------------------------
+        # Decide based on VECTOR STORE existence, not PDF existence
+        # --------------------------------------------------
+        if len(vectorstore_blobs) > 0:
             print(
                 f"[DEBUG] CURRENT LOGIC DECISION: "
-                f"Skip {pdf_name} because gcs_bucket.blob(pdf_path).exists() returned True."
+                f"Skip {pdf_name} because a vector store already exists."
             )
-
-            if len(vectorstore_blobs) == 0:
-                print(
-                    f"[WARNING] Suspicious case: PDF blob exists, but NO vectorstore blobs were found "
-                    f"under {expected_vectorstore_prefix}. "
-                    f"This suggests the current skip condition may be wrong."
-                )
 
             processed_pdfs.add(pdf_id)
             continue
 
         # --------------------------------------------------
-        # If current logic decides it does not exist, create vectorstore
+        # No vector store found → create one
         # --------------------------------------------------
-        print(f"[DEBUG] CURRENT LOGIC DECISION: Create vectorstore for PDF: {pdf_name}")
+        print(
+            f"[DEBUG] CURRENT LOGIC DECISION: "
+            f"No vector store found. Creating one for {pdf_name}"
+        )
         print(f"[DEBUG] Calling create_vectorstore_for_pdf(...) for {pdf_name}")
 
         try:
