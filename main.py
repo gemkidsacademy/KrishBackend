@@ -6629,11 +6629,98 @@ async def search_pdfs(
     """
 
     # ------------------ Step 6: Call GPT ------------------
+    print("\n==================== OPENAI REQUEST START ====================")
+    print(f"[INFO] User ID      : {user_id}")
+    print(f"[INFO] Model        : {ANSWER_MODEL}")
+    print(f"[INFO] Sending request to OpenAI...")
+
     answer_response = openai_client.chat.completions.create(
         model=ANSWER_MODEL,
         messages=[{"role": "user", "content": gpt_prompt}],
         temperature=0.2
     )
+
+    print("[INFO] OpenAI response received.")
+
+    # ------------------ Step 6.1: Log OpenAI Usage ------------------
+    try:
+        usage = answer_response.usage
+
+        prompt_tokens = usage.prompt_tokens or 0
+        completion_tokens = usage.completion_tokens or 0
+        total_tokens = usage.total_tokens or (
+            prompt_tokens + completion_tokens
+        )
+
+        # --------------------------------------------------------
+        # OpenAI Pricing (USD per token)
+        # Update these values if OpenAI changes pricing.
+        # --------------------------------------------------------
+        MODEL_PRICING = {
+            "gpt-4.1-mini": {
+                "input": 0.40 / 1_000_000,
+                "output": 1.60 / 1_000_000,
+            },
+            "gpt-4.1": {
+                "input": 2.00 / 1_000_000,
+                "output": 8.00 / 1_000_000,
+            },
+            "gpt-4o-mini": {
+                "input": 0.15 / 1_000_000,
+                "output": 0.60 / 1_000_000,
+            },
+            "gpt-4o": {
+                "input": 2.50 / 1_000_000,
+                "output": 10.00 / 1_000_000,
+            },
+        }
+
+        pricing = MODEL_PRICING.get(ANSWER_MODEL)
+
+        if pricing is None:
+            print(f"[WARNING] No pricing configured for model '{ANSWER_MODEL}'. Cost will be saved as $0.00")
+            input_price = 0.0
+            output_price = 0.0
+        else:
+            input_price = pricing["input"]
+            output_price = pricing["output"]
+
+        cost = (
+            prompt_tokens * input_price +
+            completion_tokens * output_price
+        )
+
+        print("\n==================== OPENAI USAGE ====================")
+        print(f"[INFO] User ID             : {user_id}")
+        print(f"[INFO] Model               : {ANSWER_MODEL}")
+        print(f"[INFO] Prompt Tokens       : {prompt_tokens}")
+        print(f"[INFO] Completion Tokens   : {completion_tokens}")
+        print(f"[INFO] Total Tokens        : {total_tokens}")
+        print(f"[INFO] Input Price/Token   : ${input_price:.12f}")
+        print(f"[INFO] Output Price/Token  : ${output_price:.12f}")
+        print(f"[INFO] Calculated Cost USD : ${cost:.8f}")
+
+        usage_log = OpenAIUsageLog(
+            user_id=user_id,
+            model_name=ANSWER_MODEL,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost,
+        )
+
+        db.add(usage_log)
+
+        print("[INFO] Usage record added to SQLAlchemy session.")
+        print("[INFO] Record will be written to database on the next db.commit().")
+        print("======================================================\n")
+
+    except Exception as e:
+        print("\n==================== OPENAI USAGE ERROR ====================")
+        print(f"[ERROR] Failed to record OpenAI usage.")
+        print(f"[ERROR] User ID : {user_id}")
+        print(f"[ERROR] Model   : {ANSWER_MODEL}")
+        print(f"[ERROR] Reason  : {str(e)}")
+        print("===========================================================\n")
     answer_text = answer_response.choices[0].message.content.strip()
 
     print("\n========== RAW GPT RESPONSE ==========")
