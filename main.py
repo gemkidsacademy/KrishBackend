@@ -185,6 +185,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://gemai.gemkidsacademy.com.au",
         "https://krish-chat-bot.vercel.app",
         "https://gamified-quiz-peach.vercel.app",
         "https://krish-chat-bot-new.vercel.app",
